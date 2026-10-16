@@ -1,0 +1,672 @@
+k
+=============================================================
+   SIGNBRIDGE AI - predict.py EXPLANATION FOR VIVA
+   Simple Language, Detailed Concepts
+=============================================================
+
+-------------------------------------------------------------
+WHAT IS THIS PROJECT?
+-------------------------------------------------------------
+SignBridge AI is a real-time Sign Language Recognition system.
+It uses your webcam to watch your hand, detects which letter 
+(A, B, C, D, or E) you are signing, and displays it on screen.
+You can build words letter by letter using keyboard shortcuts.
+
+
+=============================================================
+SECTION 1: SUPPRESSING UNWANTED LOGS
+=============================================================
+
+CODE:
+  os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+  os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+  os.environ['GLOG_minloglevel'] = '3'
+  warnings.filterwarnings('ignore')
+
+EXPLANATION:
+- TensorFlow (the AI library) normally prints a LOT of 
+  technical messages when it starts. These are not errors,
+  just informational messages, but they clutter the screen.
+- os.environ sets "environment variables" -- think of them 
+  as settings you give to a program BEFORE it starts.
+- TF_CPP_MIN_LOG_LEVEL = '3' means: only show FATAL errors,
+  hide everything else.
+- TF_ENABLE_ONEDNN_OPTS = '0' turns off Intel's oneDNN 
+  optimization messages (oneDNN = a math library for AI).
+- GLOG_minloglevel = '3' silences MediaPipe's C++ logs.
+- warnings.filterwarnings('ignore') hides Python warnings.
+
+WHY IMPORTANT: Done BEFORE importing TensorFlow, because 
+once TF is loaded, these settings no longer work.
+
+KEY CONCEPT: Environment variables are like settings/config 
+that the OS passes to programs.
+
+
+=============================================================
+SECTION 2: OPENING THE CAMERA IMMEDIATELY
+=============================================================
+
+CODE:
+  import cv2
+  cap = cv2.VideoCapture(0)
+
+EXPLANATION:
+- cv2 is OpenCV -- a library for computer vision (working 
+  with cameras and images).
+- VideoCapture(0) opens the default webcam (camera index 0).
+- This is done FIRST, before loading heavy AI models, so 
+  the user sees something immediately instead of a black screen.
+
+KEY CONCEPT: "0" means the first/default webcam connected 
+to the computer.
+
+
+=============================================================
+SECTION 3: LOADING SCREEN (show_loading function)
+=============================================================
+
+CODE:
+  def show_loading(message="Loading SignBridge AI..."):
+      ret, frame = cap.read()
+      ...
+      cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+      cv2.putText(...)
+      cv2.imshow("SignBridge AI", frame)
+      cv2.waitKey(1)
+
+EXPLANATION:
+- cap.read() captures one frame (one photo) from the webcam.
+- ret = True/False (did we successfully get the frame?)
+- frame = the actual image (as a NumPy array of pixels).
+- cv2.flip(frame, 1) mirrors the image horizontally so it 
+  feels like looking in a mirror (natural for the user).
+- If the camera fails, numpy.zeros creates a black image 
+  as a fallback.
+- cv2.rectangle draws a dark rectangle on top of the frame.
+- cv2.addWeighted blends two images together:
+    result = overlay * 0.6 + frame * 0.4
+  This creates a semi-transparent dark overlay effect.
+- cv2.putText draws text on the frame.
+- cv2.imshow shows the frame in a window.
+- cv2.waitKey(1) waits 1ms -- needed to actually render 
+  the window on screen.
+
+KEY CONCEPT: addWeighted is alpha blending -- mixing two 
+images with different transparency levels to create overlays.
+
+
+=============================================================
+SECTION 4: LOADING HEAVY LIBRARIES
+=============================================================
+
+CODE:
+  import numpy as np
+  import tensorflow as tf
+  import mediapipe as mp
+  from collections import deque, Counter
+  from utils import normalize_landmarks
+
+EXPLANATION:
+- numpy: Library for fast mathematical operations on arrays.
+  A camera frame is just a 3D array (height x width x 3 colors).
+- tensorflow: Google's AI/ML library. Used to run the trained
+  neural network model.
+- mediapipe: Google's library for detecting hands, faces, etc.
+  in real time from a camera.
+- deque: A "double-ended queue" -- like a list but with a 
+  fixed maximum size. Old items are automatically removed.
+  Used here for the "smoothing window" (stores last 15 predictions).
+- Counter: Counts how many times each item appears in a list.
+  Used to find the most common prediction (majority vote).
+- normalize_landmarks: Our own function from utils.py that 
+  scales hand coordinates to a standard format.
+
+
+=============================================================
+SECTION 5: LOADING THE AI MODEL (TFLite vs Keras)
+=============================================================
+
+CODE:
+  if os.path.exists(TFLITE_PATH):
+      interpreter = tf.lite.Interpreter(model_path=TFLITE_PATH)
+      interpreter.allocate_tensors()
+      input_details  = interpreter.get_input_details()
+      output_details = interpreter.get_output_details()
+      USE_TFLITE = True
+  else:
+      keras_model = tf.keras.models.load_model(KERAS_PATH)
+      USE_TFLITE  = False
+
+EXPLANATION:
+- The AI model is a Neural Network trained to recognize 
+  hand signs A, B, C, D, E.
+- Two formats are supported:
+  
+  TFLite (.tflite file) -- PREFERRED:
+  - TFLite = TensorFlow Lite (lightweight version for mobile/edge)
+  - Only 70 KB in size, loads in ~0.1 seconds
+  - Uses an "interpreter" to run predictions
+  - allocate_tensors() reserves memory for inputs/outputs
+  - get_input_details() tells us the shape and type of 
+    data the model expects as input
+  - get_output_details() tells us the shape of the model's 
+    output (probabilities for each class)
+
+  Keras (.h5 file) -- FALLBACK:
+  - Full Keras model, ~800 KB, slower to load
+  - Used if TFLite file is not found
+
+KEY CONCEPT -- What is a Neural Network?
+  A neural network is a mathematical model inspired by 
+  the human brain. It has "layers" of interconnected nodes.
+  You feed it input data (hand landmark coordinates), it 
+  processes it through multiple layers, and outputs a 
+  probability for each class (A, B, C, D, E).
+  The class with the HIGHEST probability is the prediction.
+
+KEY CONCEPT -- What are Tensors?
+  Tensors are multi-dimensional arrays. In ML, all data 
+  (images, numbers, predictions) are represented as tensors.
+  Input tensor: the hand landmark coordinates we feed in.
+  Output tensor: the probabilities for each sign class.
+
+
+=============================================================
+SECTION 6: LOADING CLASS LABELS
+=============================================================
+
+CODE:
+  classes = np.load("label_encoder.npy", allow_pickle=True)
+
+EXPLANATION:
+- The model outputs numbers (0, 1, 2, 3, 4).
+- classes maps those numbers back to letters: 
+  0 -> 'A', 1 -> 'B', 2 -> 'C', 3 -> 'D', 4 -> 'E'
+- label_encoder.npy is a NumPy file saved during training.
+- allow_pickle=True allows loading Python objects from the file.
+
+
+=============================================================
+SECTION 7: predict_sign() FUNCTION
+=============================================================
+
+CODE:
+  def predict_sign(norm_landmarks):
+      inp = np.array([norm_landmarks], dtype=np.float32)
+      if USE_TFLITE:
+          interpreter.set_tensor(input_details[0]['index'], inp)
+          interpreter.invoke()
+          probs = interpreter.get_tensor(output_details[0]['index'])[0]
+      else:
+          probs = keras_model.predict(inp, verbose=0)[0]
+      idx = int(np.argmax(probs))
+      return classes[idx], float(probs[idx] * 100)
+
+EXPLANATION:
+- Takes normalized hand landmark coordinates as input.
+- np.array([norm_landmarks], dtype=np.float32):
+  Wraps data in a batch of 1 (models expect batches of data)
+  dtype=np.float32: model expects 32-bit floating point numbers.
+
+TFLite path:
+  - set_tensor: loads our input data into the model
+  - invoke(): runs the model (forward pass through the network)
+  - get_tensor: reads the output (probability array)
+
+Keras path:
+  - model.predict() does all of the above in one call
+
+- np.argmax(probs): finds the index of the highest probability
+  Example: probs = [0.02, 0.91, 0.03, 0.02, 0.02]
+           argmax = 1 (index of 0.91, which is 'B')
+- probs[idx] * 100: converts to percentage (0.91 -> 91%)
+- Returns: ('B', 91.0)
+
+KEY CONCEPT: argmax finds the position of the largest value 
+in an array. Used to find which sign has highest confidence.
+
+
+=============================================================
+SECTION 8: MEDIAPIPE HAND LANDMARKER SETUP
+=============================================================
+
+CODE:
+  latest_result = None
+  def save_result(result, output_image, timestamp_ms):
+      global latest_result
+      latest_result = result
+
+  options = HandLandmarkerOptions(
+      base_options=BaseOptions(model_asset_path="hand_landmarker.task"),
+      running_mode=VisionRunningMode.LIVE_STREAM,
+      num_hands=1,
+      result_callback=save_result
+  )
+
+EXPLANATION:
+- MediaPipe's HandLandmarker detects 21 key points (landmarks) 
+  on a hand -- fingertips, knuckles, wrist, etc.
+- These 21 points each have x, y, z coordinates = 63 numbers total.
+- LIVE_STREAM mode: asynchronous (non-blocking) detection.
+  It processes frames in background and calls save_result() 
+  when detection is complete.
+- num_hands=1: only detect one hand at a time.
+- result_callback=save_result: when MediaPipe finishes 
+  processing a frame, it calls this function with the result.
+- global latest_result: saves the result to a global variable 
+  so the main loop can access it.
+
+KEY CONCEPT: 
+  SYNCHRONOUS = wait for result before continuing.
+  ASYNCHRONOUS = continue without waiting; get result later 
+  via a callback function. LIVE_STREAM uses async for speed.
+
+KEY CONCEPT: Hand Landmarks
+  MediaPipe detects 21 specific points on the hand.
+  Each point has x (horizontal), y (vertical), z (depth).
+  These coordinates describe the SHAPE/POSE of the hand.
+
+
+=============================================================
+SECTION 9: SMOOTHING WITH DEQUE AND MAJORITY VOTE
+=============================================================
+
+CODE:
+  SMOOTHING_WINDOW = 15
+  prediction_buf = deque(maxlen=SMOOTHING_WINDOW)
+  conf_buf       = deque(maxlen=SMOOTHING_WINDOW)
+  ...
+  prediction_buf.append(letter)
+  conf_buf.append(conf)
+  vote = Counter(prediction_buf).most_common(1)[0]
+  current_letter = vote[0]
+  current_conf   = float(np.mean(conf_buf))
+
+EXPLANATION:
+- The camera runs at ~30 frames per second. Each frame gives 
+  a prediction. Without smoothing, the letter flickers rapidly 
+  between different characters.
+- deque(maxlen=15): stores the last 15 predictions only.
+  When you add a 16th, the oldest is automatically removed.
+- Counter({'B': 12, 'A': 2, 'C': 1}): counts occurrences.
+- most_common(1)[0]: returns the single most frequent item.
+  [0] gets the (letter, count) tuple, vote[0] is just the letter.
+- np.mean(conf_buf): average confidence over last 15 frames.
+
+WHY IMPORTANT: Smoothing makes the system stable and prevents 
+flickering. It's like taking a poll of the last 15 predictions 
+and going with the majority answer.
+
+KEY CONCEPT: Majority Vote Smoothing
+  Instead of trusting a single noisy prediction, collect 
+  many predictions and pick the most common one. More robust!
+
+
+=============================================================
+SECTION 10: DRAWING THE HAND SKELETON
+=============================================================
+
+CODE:
+  CONNECTIONS = [(0,1),(1,2),(2,3),(3,4), ...]
+  
+  def draw_skeleton(frame, result, color):
+      h, w, _ = frame.shape
+      pts = result.hand_landmarks[0]
+      xy  = [(int(lm.x * w), int(lm.y * h)) for lm in pts]
+      for a, b in CONNECTIONS:
+          cv2.line(frame, xy[a], xy[b], color, 2)
+      for x, y in xy:
+          cv2.circle(frame, (x, y), 5, (255,255,255), -1)
+          cv2.circle(frame, (x, y), 3, color, -1)
+
+EXPLANATION:
+- MediaPipe gives landmark coordinates as fractions (0.0 to 1.0).
+  lm.x = 0.5 means the point is halfway across the frame.
+- Multiply by width/height to get actual pixel coordinates.
+- CONNECTIONS: list of pairs defining which landmarks to 
+  connect with a line (forming the skeleton).
+  (0,1) = line from wrist to base of thumb, etc.
+- cv2.line draws lines between connected landmarks.
+- cv2.circle draws circles at each landmark point.
+  The outer white circle + inner colored circle = nice look.
+
+KEY CONCEPT: The landmarks are "normalized" (0-1 range) by 
+MediaPipe. We "denormalize" by multiplying by image dimensions 
+to get pixel coordinates for drawing.
+
+
+=============================================================
+SECTION 11: CONFIDENCE BAR
+=============================================================
+
+CODE:
+  def draw_confidence_bar(frame, confidence, color, ...):
+      cv2.rectangle(frame, (x,y), (x+width, y+height), (40,40,40), -1)
+      filled = int((confidence / 100.0) * width)
+      cv2.rectangle(frame, (x,y), (x+filled, y+height), color, -1)
+
+EXPLANATION:
+- Draws a visual progress-bar style indicator of how confident 
+  the AI is about its prediction.
+- First rectangle: the full empty bar (dark gray background).
+- filled = proportional width based on confidence percentage.
+  If confidence = 75%, filled = 0.75 * 260 = 195 pixels.
+- Second rectangle: the colored fill representing the confidence.
+- cv2.putText adds the percentage number next to the bar.
+
+KEY CONCEPT: Visual feedback of AI confidence helps the user 
+know when to trust the prediction.
+
+
+=============================================================
+SECTION 12: extract_raw_landmarks() FUNCTION
+=============================================================
+
+CODE:
+  def extract_raw_landmarks(result):
+      if result and result.hand_landmarks:
+          hand = result.hand_landmarks[0]
+          return [coord for lm in hand for coord in (lm.x, lm.y, lm.z)]
+      return None
+
+EXPLANATION:
+- Takes MediaPipe result and extracts all 21 landmark coords.
+- For each landmark: takes x, y, z values.
+- Flattens into a single list of 63 numbers (21 * 3).
+  [x0,y0,z0, x1,y1,z1, x2,y2,z2, ..., x20,y20,z20]
+- Returns None if no hand is detected.
+- This is a list comprehension -- a compact Python loop.
+
+KEY CONCEPT: The neural network takes a flat array of numbers 
+as input, not structured objects. We flatten the landmarks 
+into one long list/array for the model.
+
+
+=============================================================
+SECTION 13: NORMALIZE_LANDMARKS (from utils.py)
+=============================================================
+
+CODE:
+  norm_data = normalize_landmarks(raw)
+
+EXPLANATION:
+- Raw landmarks are in screen coordinates (relative to image).
+  But different people have different hand sizes and positions.
+- Normalization makes the coordinates consistent:
+  1. Translate: move wrist to origin (0,0,0)
+  2. Scale: divide by the maximum distance so all hands 
+     have the same "size" in coordinate space.
+- This matches EXACTLY how training data was prepared, 
+  so the model sees the same kind of input it was trained on.
+
+KEY CONCEPT: If training data was normalized and test data 
+is not, the model fails. Preprocessing must match exactly!
+
+
+=============================================================
+SECTION 14: MAIN LOOP
+=============================================================
+
+CODE:
+  with HandLandmarker.create_from_options(options) as landmarker:
+      while True:
+          ret, frame = cap.read()
+          frame = cv2.flip(frame, 1)
+          rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+          timestamp += 1
+          mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+          landmarker.detect_async(mp_image, timestamp)
+
+EXPLANATION:
+- "with" statement: creates the landmarker and automatically 
+  cleans up when done (even if an error occurs).
+- while True: runs forever until user presses Q.
+- cap.read(): gets a new frame from webcam every iteration.
+- cv2.flip(frame, 1): mirror the image horizontally.
+- cv2.cvtColor: OpenCV uses BGR color order (not RGB).
+  MediaPipe needs RGB. This converts between the two.
+- timestamp += 1: MediaPipe LIVE_STREAM needs an increasing 
+  timestamp to process frames in order.
+- mp.Image: wraps the numpy array in MediaPipe's image format.
+- detect_async: sends frame to MediaPipe for async processing.
+  Does NOT wait -- continues immediately to next line.
+  When detection is done, save_result() is called automatically.
+
+KEY CONCEPT: BGR vs RGB
+  OpenCV stores pixels as Blue-Green-Red (historical reason).
+  Most other libraries use Red-Green-Blue (RGB).
+  Always convert when passing between OpenCV and other libs!
+
+KEY CONCEPT: Async Detection
+  detect_async sends the work to a background thread.
+  The main loop keeps running and reading new frames.
+  Result from previous frame arrives via callback (save_result).
+
+
+=============================================================
+SECTION 15: HUD OVERLAY (Heads-Up Display)
+=============================================================
+
+CODE:
+  overlay = frame.copy()
+  cv2.rectangle(overlay, (0,0), (320,140), (15,15,15), -1)
+  cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+
+EXPLANATION:
+- HUD = the information displayed on top of the camera feed.
+- frame.copy() creates a copy so we can draw on it without 
+  affecting the original.
+- Draw a dark rectangle on the COPY (overlay).
+- addWeighted blends overlay (65%) with original frame (35%).
+  This gives a semi-transparent dark panel effect.
+- Then draw text ON TOP of the blended result.
+
+- If confidence >= 40%: show the detected letter in large font 
+  with color and the confidence bar.
+- If confidence < 40% or no hand: show "---" in gray with 
+  "Show a sign (A-E)" hint text.
+
+KEY CONCEPT: MIN_CONFIDENCE = 40.0
+  If the model is less than 40% sure, we don't show a result.
+  This prevents showing wrong predictions when the model 
+  is uncertain (e.g., hand partially out of frame).
+
+
+=============================================================
+SECTION 16: WORD BUILDER PANEL
+=============================================================
+
+CODE:
+  cv2.putText(frame, "Word: " + (word if word else "_"), ...)
+
+  key = cv2.waitKey(1) & 0xFF
+  if key == ord('q'):        break
+  elif key == ord(' ') and current_letter and current_conf >= MIN_CONFIDENCE:
+      word += current_letter
+  elif key == 8:             word = word[:-1]
+  elif key == ord('c'):      word = ""
+
+EXPLANATION:
+- A "word" variable accumulates letters the user confirms.
+- cv2.waitKey(1): waits 1ms for a key press. Returns key code.
+- & 0xFF: bitwise AND to handle 64-bit systems correctly 
+  (keeps only the last 8 bits of the key code).
+- ord('q'): ASCII code for 'q' = 113. Break exits the loop.
+- SPACE (ord(' ')): adds the current letter to word, 
+  only if a letter is detected AND confidence >= 40%.
+- key == 8: ASCII code 8 = BACKSPACE. Deletes last letter.
+  word[:-1] = all characters except the last one.
+- ord('c'): clears the entire word by setting it to "".
+
+KEY CONCEPT: ASCII codes
+  Every keyboard character has a numeric code (ASCII).
+  ord() converts a character to its ASCII number.
+  Example: ord('A') = 65, ord('q') = 113, BACKSPACE = 8.
+
+
+=============================================================
+SECTION 17: CLEANUP
+=============================================================
+
+CODE:
+  cap.release()
+  cv2.destroyAllWindows()
+  print(f"\nSession ended. Final word: '{word}'")
+
+EXPLANATION:
+- cap.release(): properly closes the webcam connection.
+  Important! Without this, the camera stays "occupied" 
+  and other apps can't use it.
+- cv2.destroyAllWindows(): closes all OpenCV windows.
+- f-string: modern Python string formatting.
+  f"text {variable}" embeds variable values in strings.
+
+KEY CONCEPT: Always release resources after use! 
+  This is called "resource management" or "cleanup."
+  The "with" statement for the landmarker does this automatically.
+
+
+=============================================================
+OVERALL FLOW SUMMARY (How it all works together)
+=============================================================
+
+  START
+    |
+    v
+  Open camera --> show loading screen while loading AI model
+    |
+    v
+  Load TFLite model (fast, 70KB) or Keras fallback
+    |
+    v
+  Set up MediaPipe HandLandmarker in LIVE_STREAM mode
+    |
+    v
+  MAIN LOOP (runs ~30 times per second):
+    1. Read frame from webcam
+    2. Mirror frame horizontally
+    3. Convert BGR -> RGB
+    4. Send to MediaPipe asynchronously (background)
+    5. Get latest hand landmarks from previous frame
+    6. Normalize landmarks (scale/translate)
+    7. Feed to neural network --> get letter + confidence
+    8. Add to smoothing buffer (last 15 predictions)
+    9. Majority vote --> stable current letter
+   10. Draw skeleton on hand
+   11. Draw HUD: letter, confidence bar
+   12. Draw word builder panel
+   13. Show frame in window
+   14. Handle key presses:
+       SPACE -> add letter to word
+       BACKSPACE -> remove last letter
+       C -> clear word
+       Q -> quit
+    |
+    v
+  QUIT
+    |
+    v
+  Release camera, close windows, print final word
+
+
+=============================================================
+KEY CONCEPTS SUMMARY FOR VIVA
+=============================================================
+
+1. ENVIRONMENT VARIABLES: Settings passed to programs before 
+   they start. Used here to suppress TensorFlow log spam.
+
+2. OPENCV (cv2): Library for camera access, image processing,
+   drawing shapes/text on frames.
+
+3. BGR vs RGB: OpenCV uses BGR order; MediaPipe/others use RGB.
+   Always convert with cvtColor when switching libraries.
+
+4. NEURAL NETWORK: AI model that maps input (landmark coords)
+   to output (probability of each sign class A-E).
+
+5. TFLITE: Lightweight version of TensorFlow. Faster, smaller.
+   Uses Interpreter instead of full Keras model.
+
+6. ARGMAX: Finds the index of the maximum value in an array.
+   Used to pick the sign with highest probability.
+
+7. MEDIAPIPE: Google's library that detects 21 hand landmarks
+   (key points) in real time from webcam.
+
+8. ASYNC/CALLBACK: detect_async doesn't wait for result.
+   MediaPipe calls save_result() when detection is complete.
+   Main loop keeps running without waiting.
+
+9. DEQUE: Fixed-size queue. Adding beyond maxlen drops oldest.
+   Used to store last 15 predictions for smoothing.
+
+10. MAJORITY VOTE SMOOTHING: Take last 15 predictions, pick
+    the most common one. Prevents flickering/instability.
+
+11. NORMALIZATION: Scaling coordinates so different hand sizes
+    all look the same to the model. Must match training pipeline.
+
+12. ALPHA BLENDING (addWeighted): Mixing two images with 
+    transparency weights to create overlay effects.
+
+13. ASCII / ord(): Every character has a numeric code.
+    ord('q') = 113. Used to detect which key was pressed.
+
+14. RESOURCE CLEANUP: cap.release(), destroyAllWindows().
+    Always release hardware resources when done.
+
+15. CONFIDENCE THRESHOLD (MIN_CONFIDENCE = 40%): Only show 
+    prediction if model is at least 40% confident.
+    Prevents wrong/uncertain predictions from being shown.
+
+
+=============================================================
+LIKELY VIVA QUESTIONS & ANSWERS
+=============================================================
+
+Q: Why do we suppress environment variables before importing?
+A: TensorFlow reads these settings at import time. If we set 
+   them after importing, they have no effect.
+
+Q: Why use TFLite instead of Keras?
+A: TFLite model is 70KB vs 800KB. Loads 10x faster. Optimized 
+   for real-time/edge inference. Perfect for live prediction.
+
+Q: What are the 21 hand landmarks?
+A: MediaPipe detects 21 key points on the hand: wrist (1), 
+   thumb joints (4), and 4 joints each on 4 fingers (16).
+   Each has x, y, z coordinates = 63 total numbers.
+
+Q: Why do we normalize landmarks?
+A: To make the model's input consistent. Without normalization,
+   a hand near the camera vs far away would give very different
+   coordinate values, confusing the model.
+
+Q: What is majority vote smoothing and why do we need it?
+A: We collect the last 15 frame predictions and pick the most
+   common letter. This removes flickering caused by occasional 
+   wrong predictions in individual frames.
+
+Q: Why flip the frame horizontally?
+A: So the display acts like a mirror. When user moves right 
+   hand right, it appears on the right side of screen.
+   More intuitive and natural for the user.
+
+Q: What does cv2.waitKey(1) & 0xFF do?
+A: waitKey(1) waits 1ms and returns the pressed key's code.
+   & 0xFF keeps only the last 8 bits to handle 64-bit systems.
+
+Q: Why is the camera opened before loading the model?
+A: Loading AI model takes a few seconds. By opening camera 
+   first, we can show a "Loading..." screen to the user 
+   instead of showing a frozen/blank screen.
+
+Q: What happens when confidence is below 40%?
+A: The letter "---" is shown in gray, and pressing SPACE 
+   will NOT add a letter. This prevents adding wrong letters.
+
+=============================================================
+END OF EXPLANATION
+=============================================================

@@ -1,0 +1,166 @@
+================================================================================
+          SIGNBRIDGE AI — PROJECT PRESENTATION CONTEXT & PROMPT GENERATOR
+================================================================================
+
+This file contains structured, comprehensive technical data about the SignBridge AI 
+project. It is designed to act as an optimized context injector/prompt for another 
+Large Language Model (LLM) to generate a professional, slide-by-slide presentation 
+(PowerPoint/Google Slides).
+
+--------------------------------------------------------------------------------
+LLM PROMPT INSTRUCTION FOR PPT GENERATION:
+"You are a professional designer and copywriter. Use the structured project details 
+below to create a slide-by-slide presentation script. For each slide, write:
+1. Slide Title
+2. Key Visual Ideas / Layout Suggestions
+3. Bullet points for the slide (concise, high-impact)
+4. Speaker Notes (detailed explanation to read aloud during presentation)".
+--------------------------------------------------------------------------------
+
+
+================================================================================
+PART 1: PROJECT METADATA & PROFILE
+================================================================================
+* Project Name: SignBridge AI (v6)
+* Subtitle: Real-Time Sign Language Recognition & Translation using Hybrid Deep Learning
+* Core Goal: Bridging the communication gap between the deaf/mute community and the general public.
+* Development Phase: Completed Phase 3 (Unified static and motion sign detection).
+
+
+
+================================================================================
+PART 2: THE PROBLEM STATEMENT
+================================================================================
+* The Communication Gap: Over 70 million deaf people globally use sign language, but very few hearing individuals understand it, creating a severe accessibility barrier.
+* Limitations of Existing Systems:
+  1. Static-Only Focus: Most current solutions only recognize static hand shapes (A-I, K-Y) and ignore dynamic/motion letters (J and Z) because sequence modeling is computationally heavy.
+  2. Latency & Resource Overload: Running full deep learning models (like Keras .h5 files) in real-time causes frame lag (low FPS) on average consumer devices without dedicated GPUs.
+  3. Lack of Feedback: Many translators display text on screen but lack immediate audio feedback, making natural conversing impossible.
+  4. Environmental Instability: Systems often fail if the hand moves closer/farther, is at a slight angle, or if the user is left-handed when trained on right-handed datasets.
+
+
+================================================================================
+PART 3: PROJECT OBJECTIVES
+================================================================================
+. To develop an AI-based system that detects and recognizes sign language gestures using Computer Vision and Machine Learning techniques. . To recognize sign language alphabets (A–Z) and combine them into meaningful words and sentences for effective communication. . To support multiple sign languages, including Indian Sign Language (ISL) and American Sign Language (ASL), and convert the generated text into real-time speech using Text-to-Speech technology. . To develop a scalable and intelligent communication platform that can adapt to new signs, user variations, and future enhancements. 
+
+================================================================================
+PART 4: THE TECHNICAL STACK
+================================================================================
+* Language: Python 3.10 / 3.12
+* Hand Tracking: Google MediaPipe (HandLandmarker task running in LIVE_STREAM mode)
+* Deep Learning Frameworks: TensorFlow & Keras
+* Model Optimization: TensorFlow Lite (TFLite Converter with quantization)
+* Graphic Interface: OpenCV (cv2) for camera, mirrors, trails, and custom HUDs
+* System Data Management: NumPy (for high-dimensional array handling)
+* Speech Processing: Pyttsx3 (Offline Text-to-Speech Engine)
+* System Concurrency: Python Threading & Queue (for non-blocking audio execution)
+* Evaluation & Plotting: Scikit-learn (Confusion Matrix), Matplotlib, Seaborn
+
+
+================================================================================
+PART 5: DETECTION & PRE-PROCESSING PIPELINE
+================================================================================
+Every frame captured from the camera goes through a multi-stage pre-processing pipeline:
+
+1. Frame Capture & Mirroring:
+   - Captures frame via OpenCV and mirrors it using `cv2.flip(frame, 1)` for intuitive user coordinate feedback.
+2. Google MediaPipe Coordinate Extraction:
+   - Detects 21 distinct hand landmarks. Each landmark has 3D coordinates (X, Y, Z).
+   - Flat vector of 63 coordinates total is extracted.
+3. Custom Landmark Normalization (utils.py):
+   - Wrist Translation: Wrist landmark (Index 0) is set as the origin (0,0,0). All other coordinates are translated relative to the wrist. Resolves camera position variance.
+   - Scale Invariance: All coordinates are divided by the Palm Length (Euclidean distance between landmark 0 and landmark 9 - Middle finger base MCP). Resolves camera distance variance.
+4. Runtime Hand Mirroring:
+   - Tracks hand label (handedness). If the left hand is detected, the pipeline automatically negates the X-axis coordinates: X_new = -X.
+   - Allows a model trained strictly on right-hand data to perfectly read left-hand shapes.
+
+
+================================================================================
+PART 6: HYBRID SYSTEM ARCHITECTURE
+================================================================================
+To handle both static and dynamic signs without false classification, SignBridge AI uses a hybrid, multi-threaded pipeline:
+
+                              [Camera Frame]
+                                    |
+                                    v
+                          [MediaPipe Extraction]
+                                    |
+                                    v
+                          [Landmark Normalization]
+                                    |
+                   ┌────────────────┴────────────────┐
+                   |                                 |
+             [Default Mode]                   [M-Key Triggered]
+                   |                                 |
+        [Static Sign Classifier]           [Motion Sequence Capture]
+        - 5-Layer Dense FFNN               - Collects 30 frames (30, 63)
+        - Predicts A-Y (minus J)           - Displays progress bar on HUD
+                   |                                 |
+       [20-Frame Weighted Smooth]                    v
+        - Decays older predictions         [Dynamic Sign Classifier]
+        - Stabilizes flickering letter     - Bidirectional LSTM
+                   |                       - Predicts J or Z
+                   |                                 |
+                   └────────────────┬────────────────┘
+                                    v
+                           [Decision Engine]
+                                    |
+                   ┌────────────────┴────────────────┐
+                   v                                 v
+             [Visual HUD]                    [Voice System]
+       - Custom HSV color outline       - Pyttsx3 daemon worker thread
+       - Floating confidence bar        - Consumes non-blocking queue
+       - Active word builder display    - Speaks letter, word, or spelling
+
+
+================================================================================
+PART 7: TRAINING DATASETS & MODEL CONFIGURATIONS
+================================================================================
+
+1. Static Neural Network Model (A-Y, except J)
+   - Raw Dataset: 3,350 samples collected (100 for A-E, 150 for F-Y).
+   - Augmentation Pipeline (utils.py): Multiplied data by a factor of 15 (~50,250 augmented samples) using:
+     * Gaussian Noise (Sensor jitter)
+     * Scale Jitter (Distance changes)
+     * 2D Rotation (Wrist tilt up to 15 degrees)
+     * Perspective Warp (Slight camera angle shifts)
+     * Finger Dropout (Simulating finger occlusion/blocking)
+     * Hand Mirroring (Teaching both-hand geometry)
+   - Architecture:
+     * Dense(512, Batch Normalization, Dropout 0.40, L2 Reg)
+     * Dense(256, Batch Normalization, Dropout 0.35, L2 Reg)
+     * Dense(128, Batch Normalization, Dropout 0.30, L2 Reg)
+     * Dense(64, Batch Normalization, Dropout 0.25, L2 Reg)
+     * Dense(32, Batch Normalization, Dropout 0.20, L2 Reg)
+     * Output Dense(24, Activation='Softmax')
+   - Output footprint: Compressed from 2.5MB (.h5 Keras) to 224KB (.tflite).
+
+2. Motion LSTM Model (J & Z)
+   - Sequence Data: Captured as a temporal sequence of 30 frames per sample.
+   - Augmentation Pipeline: Speed jitter (time stretch/compress), noise, circular time shift, wrist rotation, mirror.
+   - Architecture:
+     * Input Shape: (30 frames, 63 coordinates)
+     * Bidirectional LSTM (128 units, Batch Normalization, Dropout 0.3)
+     * LSTM (64 units, Batch Normalization, Dropout 0.3)
+     * Dense (32, Batch Normalization, Dropout 0.2)
+     * Output Dense(2, Activation='Softmax') -> J and Z only.
+
+
+================================================================================
+PART 8: EXPERIMENT RESULTS & PERFORMANCE
+================================================================================
+* Accuracy: High test accuracy on static classes with a clear, diagonalized confusion matrix.
+* Size Reduction: TFLite model optimization achieved over 90% storage savings without losing prediction confidence.
+* Latency: Edge inference completes in less than 10 milliseconds, maintaining a stable 30+ FPS capture pipeline.
+* Voice Responsiveness: Daemon-based queue execution completely isolated audio delay from the frame rendering loop.
+
+
+================================================================================
+PART 9: FUTURE SCOPE
+================================================================================
+* Dictionary Scaling: Expand translation from letter-level finger-spelling to word and sentence-level gesture recognition.
+* Dual-Hand Tracking: Support dual-hand interactions (complex, multi-hand ASL signs).
+* Cross-Platform Deployment: Package models for web applications (Next.js/React + TensorFlow.js) and mobile environments (React Native).
+* Continuous Learning Loop: Integrate self-supervised data collection to capture diverse user hands automatically.
+================================================================================

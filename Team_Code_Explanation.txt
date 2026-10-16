@@ -1,0 +1,514 @@
+================================================================================
+              SIGNBRIDGE AI — PROJECT CODE EXPLANATION (v4 — UPDATED)
+          Divided into 5 Parts for 5 Team Members
+================================================================================
+
+PROJECT OVERVIEW (Say this first before explaining your part)
+---------------------------------------------------------------
+SignBridge AI is a Real-Time Sign Language Recognition system.
+It uses a webcam to detect 21 specific points on your hand, and uses a
+trained AI model to predict which ASL letter (A through Y, 24 signs) you
+are showing. The predicted letter appears on screen with a confidence bar,
+and a built-in voice system speaks the letter out loud.
+
+J and Z are skipped — they are MOTION-based signs and will be handled in
+Phase 2 of the project.
+
+The project works in this order:
+  Step 1 → Test if camera detects hand (test_hand.py)
+  Step 2 → Collect hand sign data for A-Y (data_collection.py)
+  Step 3 → Normalize and augment the data (utils.py)
+  Step 4 → Train the AI model on 24 signs (train_model.py)
+  Step 5 → Run real-time prediction with voice (predict.py)
+
+WHAT WE HAVE COMPLETED SO FAR:
+  [✓] Hand detection setup and testing
+  [✓] Data collected for all 24 signs (A-Y, no J/Z) — 150 samples each
+  [✓] Normalization + 6-type augmentation in utils.py
+  [✓] AI model trained on 24 signs — 5-layer neural network
+  [✓] Real-time prediction with voice, word builder, both-hand support
+  [ ] J and Z (motion-based) — Phase 2 (not yet done)
+
+================================================================================
+PART 1 — TEAM MEMBER 1
+FILE: test_hand.py
+TOPIC: Hand Detection Testing
+================================================================================
+
+WHAT THIS PART DOES:
+  This is the very first script we run to make sure everything is working.
+  It opens the webcam and draws green dots on the 21 points of your hand
+  in real time. If you see the dots tracking your hand, the setup is correct.
+
+IMPORTANT THINGS USED:
+
+  1. MediaPipe (mp.tasks.vision.HandLandmarker)
+     - This is a ready-made AI tool made by Google.
+     - It can detect hands in a camera image and find 21 exact points
+       on the hand (fingertips, joints, wrist, etc.).
+     - We don't build this ourselves — we just use it as a tool.
+
+  2. LIVE_STREAM mode
+     - We run MediaPipe in LIVE_STREAM mode so it processes the camera
+       feed frame by frame in real time without freezing.
+     - It uses a "callback" function called save_result() which runs
+       automatically every time MediaPipe finds a result.
+
+  3. OpenCV (cv2)
+     - Used to open the webcam, read each frame, draw the green dots,
+       and show the window on screen.
+     - cv2.VideoCapture(0) opens the default camera.
+     - cv2.circle() draws dots on the detected hand points.
+
+  4. cv2.flip(frame, 1)
+     - This flips the camera image like a mirror, so it feels natural
+       when you move your hand left or right.
+
+HOW TO EXPLAIN IT TO TEACHER:
+  "This script is our setup verification tool. It uses Google's MediaPipe
+  library to detect 21 hand landmark points in real time from the webcam.
+  If the dots appear on the hand correctly, we know the camera and
+  MediaPipe are working before we move to data collection."
+
+================================================================================
+PART 2 — TEAM MEMBER 2
+FILE: data_collection.py
+TOPIC: Collecting Sign Language Training Data (A-Y, 24 Signs)
+================================================================================
+
+WHAT THIS PART DOES:
+  This script records training data for all 24 ASL hand signs (A through Y,
+  skipping J and Z which are motion-based). For each letter, a tip is shown
+  on screen explaining the correct hand shape. The user presses SPACEBAR,
+  and the program captures 150 frames of that sign and saves the hand
+  landmark coordinates as a .npy file in the dataset folder.
+
+IMPORTANT THINGS USED:
+
+  1. 24 Static Signs (A-Y, no J, no Z)
+     - SIGNS = list("ABCDEFGHIKLMNOPQRSTUVWXY")
+     - J and Z require motion — they are planned for Phase 2.
+     - We currently have all 24 .npy files fully collected.
+
+  2. SIGN_TIPS Dictionary
+     - A new feature added for 24-sign collection.
+     - For each letter, a helpful tip appears on screen, e.g.:
+         'A': "Fist with thumb beside index finger"
+         'B': "Four fingers straight up, thumb tucked"
+     - This ensures the person shows the CORRECT shape for each sign.
+     - Without tips, similar signs like M/N, G/Q, P/K are easily confused.
+
+  3. 21 Hand Landmarks = 63 Numbers
+     - MediaPipe gives 21 points. Each point has 3 values: X, Y, Z.
+     - 21 × 3 = 63 numbers total per frame.
+     - These 63 numbers are saved as the training data for each sign.
+
+  4. SAMPLES_PER_SIGN = 150 (increased from 100 in v1)
+     - We now collect 150 frames per sign (was 100 before).
+     - More samples = better model accuracy for 24 signs.
+     - A progress bar on screen shows how many frames are collected.
+
+  5. Skip if already collected
+     - If a .npy file already exists for a sign, the script skips it.
+     - This prevents accidentally overwriting good data.
+
+  6. Spacebar trigger
+     - The person positions their hand correctly first.
+     - Only when SPACEBAR is pressed does collection begin.
+     - This ensures only clean, correct sign data is recorded.
+
+DATASET STATUS (all 24 signs collected):
+  A, B, C, D, E → 100 samples each (collected in Phase 1)
+  F through Y   → 150 samples each (collected in Phase 2 expansion)
+
+HOW TO EXPLAIN IT TO TEACHER:
+  "This script collects the training data for all 24 ASL signs. Instead
+  of saving images, we save the 63 coordinate numbers (X, Y, Z of 21
+  hand points) for each frame. We collect 150 frames per sign letter.
+  A tips dictionary ensures the user makes the correct hand shape for
+  each sign. All data is stored in numpy .npy files in the dataset folder."
+
+================================================================================
+PART 3 — TEAM MEMBER 3
+FILE: utils.py
+TOPIC: Data Normalization and Augmentation (v3 — 6 Augmentation Types)
+================================================================================
+
+WHAT THIS PART DOES:
+  This is a helper file used by both training and prediction scripts.
+  It contains the functions that make the model accurate across different
+  hand positions, distances, angles, and even different hands (left/right).
+  The augmentation was expanded from 3 types to 6 types for 24-sign accuracy.
+
+IMPORTANT THINGS USED:
+
+  1. normalize_landmarks() — THE MOST IMPORTANT FUNCTION
+     - Problem: Raw X,Y,Z numbers change based on hand position and
+       how far the hand is from the camera. The model gets confused.
+     - Fix Step 1 (Translation): Subtract the wrist position from all
+       21 points. Wrist is always at (0,0,0). Position doesn't matter.
+     - Fix Step 2 (Scaling): Divide all values by palm length (wrist to
+       middle finger base). Distance from camera doesn't matter.
+     - Result: Same sign always gives same numbers to the model.
+
+  2. mirror_hand() — NEW: Both-Hand Support
+     - The model is trained only on right-hand data by default.
+     - After normalization, a left hand is just the mirror of a right hand.
+     - This function negates the X-axis of all 21 landmarks.
+     - Used in TWO places:
+         a) augment_dataset() — adds mirrored copies during training
+         b) predict.py — flips left-hand landmarks at runtime
+     - Result: The model works equally well for both left and right hands.
+
+  3. augment_dataset() — 6 Augmentation Types (factor=15)
+     - We collect 150 samples per sign. That's small for 24 classes.
+     - This function creates realistic extra samples using 6 techniques:
+         a) Gaussian noise     — simulates camera sensor jitter
+         b) Scale jitter       — simulates hand being closer/farther
+         c) 2-D rotation       — simulates wrist tilt (up to 15 degrees)
+         d) Perspective warp   — NEW: simulates slight camera angle shift
+         e) Finger dropout     — NEW: simulates partially hidden fingers
+         f) Mirror hand        — NEW: X-flip to simulate opposite hand
+     - Multiplier (factor=15): 150 raw × 15 = ~2250 samples per sign.
+     - Total after augmentation: 24 signs × ~2250 = ~54,000 samples.
+     - Each sample randomly gets 1–3 of these augmentations applied.
+
+  4. Perspective Warp — Why It Matters for 24 Signs
+     - Signs like G/Q, P/K, M/N look nearly identical from straight-on.
+     - A slight camera angle shift makes them distinguishable.
+     - Perspective warp applies a mild shear to X and Y coordinates.
+     - This teaches the model to recognize signs from slight angles.
+
+  5. Finger Dropout — Robustness to Occlusion
+     - Sometimes fingers are partially hidden behind the palm.
+     - Finger dropout randomly zeros out a few landmark coordinates.
+     - Forces the model to work even with incomplete hand data.
+
+HOW TO EXPLAIN IT TO TEACHER:
+  "utils.py is our data processing module with two key components:
+  normalize_landmarks() makes the model position and scale invariant —
+  the same sign looks identical regardless of where the hand is. The
+  augment_dataset() function expands 3600 raw samples to ~54,000 using
+  6 augmentation techniques including the new perspective warp, finger
+  dropout, and hand mirroring. The mirror_hand() function is also used
+  at runtime so the model works for both left and right hands."
+
+================================================================================
+PART 4 — TEAM MEMBER 4
+FILE: train_model.py
+TOPIC: Building and Training the AI Neural Network (v3 — 24 Signs)
+================================================================================
+
+WHAT THIS PART DOES:
+  This script loads all 24 sign datasets, normalizes and augments the data,
+  builds a 5-layer neural network, trains it, evaluates it, and saves the
+  trained model as signbridge_model.h5 and the fast signbridge_model.tflite.
+
+IMPORTANT THINGS USED:
+
+  1. Neural Network Architecture (5 Dense Layers — upgraded for 24 signs)
+     - Input (63) → Dense(512) → Dense(256) → Dense(128) → Dense(64)
+                 → Dense(32) → Output(24)
+     - Entry layer is 512 neurons (wider than before) because 24 similar
+       signs need more capacity to learn fine differences.
+     - The final layer has 24 outputs — one for each sign (A through Y).
+     - Softmax activation gives a confidence % for each of the 24 signs.
+
+  2. BatchNormalization
+     - Added after every Dense layer.
+     - Normalizes values flowing between layers during training.
+     - Makes training faster and more stable.
+
+  3. Dropout (0.4, 0.35, 0.3, 0.25, 0.2)
+     - Randomly switches off some neurons during training.
+     - Prevents overfitting — model learns to generalize.
+
+  4. L2 Regularization (1e-4 on all layers)
+     - Adds a small penalty for large weight values.
+     - Another technique to prevent overfitting.
+
+  5. Smart Training Callbacks:
+     a) EarlyStopping — Stops training when validation accuracy stops
+        improving. PATIENCE=30 (higher than before for 24 classes).
+     b) ReduceLROnPlateau — Halves the learning rate when learning slows.
+     c) ModelCheckpoint — Saves only the BEST model during training.
+
+  6. AUG_FACTOR = 15
+     - 150 raw samples × 15 augmentation factor = ~2250 per sign.
+     - Total training set: ~54,000 samples across 24 signs.
+
+  7. Confusion Matrix + Classification Report
+     - After training, prints per-class accuracy for all 24 signs.
+     - Confusion matrix is 24×24 — shows which signs were confused.
+     - A perfect diagonal means zero prediction errors.
+
+  8. Auto TFLite Export
+     - After training, automatically converts the model to TFLite format.
+     - Uses DEFAULT optimization (quantization) to shrink the model.
+     - Saves as signbridge_model.tflite for fast loading in predict.py.
+
+HOW TO EXPLAIN IT TO TEACHER:
+  "We built a 5-layer deep neural network using TensorFlow/Keras for 24
+  ASL sign classes. The entry layer is 512 neurons wide to handle the
+  extra complexity of 24 similar-looking signs. Key techniques used are
+  BatchNormalization for training stability, Dropout and L2 regularization
+  to prevent overfitting, and smart callbacks. After training, the model
+  is automatically exported to TFLite format for fast loading at runtime."
+
+================================================================================
+PART 5 — TEAM MEMBER 5
+FILE: predict.py
+TOPIC: Real-Time Sign Prediction with Voice System (v4)
+================================================================================
+
+WHAT THIS PART DOES:
+  This is the main program the user runs. It opens the camera, detects
+  the hand, normalizes landmarks, runs the AI model, and displays the
+  predicted sign (A-Y) on screen with confidence. It includes a full
+  voice system (text-to-speech), word builder, and both-hand support.
+
+IMPORTANT THINGS USED:
+
+  1. TFLite Interpreter (Fast Loading)
+     - Uses signbridge_model.tflite (224 KB) instead of the .h5 (2.5 MB).
+     - TFLite loads 10x faster and uses less memory.
+     - Accuracy is exactly the same.
+
+  2. Camera Opens First (Immediate Feedback)
+     - The webcam opens and shows "Loading SignBridge AI..." BEFORE
+       TensorFlow and MediaPipe are imported.
+     - The user sees the camera immediately instead of a blank screen.
+
+  3. Log Suppression
+     - TF_CPP_MIN_LOG_LEVEL = '3' hides all TensorFlow warning spam.
+     - Clean, professional terminal output only.
+
+  4. 15-Frame Majority Vote Smoothing
+     - Keeps last 15 predictions in a rolling window.
+     - Shows the letter that appeared most often (majority vote).
+     - Result: Stable, non-flickering letter on screen.
+
+  5. Voice System — pyttsx3 (NEW in v4)
+     - Uses Python's pyttsx3 library for offline text-to-speech.
+     - Runs in a BACKGROUND THREAD using a queue — never lags the camera.
+     - Voice features:
+         Auto-announce : Speaks the letter when it locks in (12 stable frames)
+         SPACE key     : Adds letter to word AND speaks it
+         T key         : Speaks the entire current word
+         R key         : Spells word letter by letter ("H... E... L... L... O")
+         V key         : Toggle voice ON / OFF
+     - flush=True clears old pending speech so fast hand movements
+       don't cause a backlog of old letters being read out.
+
+  6. Both-Hand Support — Auto Mirror (NEW in v4)
+     - After cv2.flip(), MediaPipe labels user's left hand as "Right".
+     - We detect which hand it is using handedness[0][0].display_name.
+     - If left hand → we call mirror_hand() from utils.py on the
+       normalized landmarks before sending to the model.
+     - Result: Same accuracy for left-hand and right-hand users.
+
+  7. 12-Frame Stability Check for Voice
+     - Tracks how many consecutive frames show the same letter.
+     - Only speaks the letter when it has been stable for exactly 12 frames.
+     - Prevents the voice from repeating the same letter over and over.
+
+  8. Word Builder
+     - SPACE     → Adds current letter to word + speaks it
+     - BACKSPACE → Deletes last letter + says "Deleted X"
+     - C         → Clears the whole word + says "Cleared"
+     - T         → Speaks the whole word as one word
+     - R         → Spells word letter by letter
+     - V         → Toggle voice on/off
+     - Q         → Quit (says "Goodbye!")
+
+  9. Confidence Bar + Sign Colors
+     - Each of the 24 signs has its own unique color (HSV color wheel).
+     - If confidence < 40% → shows "---" (avoids wrong guesses).
+     - A color bar shows the confidence level (0–100%).
+
+  10. Hand Skeleton Drawing
+      - Draws lines between the 21 landmarks using CONNECTIONS list.
+      - The skeleton is drawn in the sign's unique color.
+
+HOW TO EXPLAIN IT TO TEACHER:
+  "predict.py is the final user-facing application. It uses TFLite for
+  fast model loading and shows a loading screen immediately. A 15-frame
+  majority-vote eliminates flickering. The voice system uses pyttsx3 in
+  a background thread — so speech never slows down the camera. Both left
+  and right hands are supported by mirroring landmarks at runtime using
+  the mirror_hand() function from utils.py. Users can build words letter
+  by letter using sign language and have them spoken aloud."
+
+================================================================================
+QUICK SUMMARY TABLE
+================================================================================
+
+  Part | File                | Responsibility
+  -----|---------------------|------------------------------------------------
+   1   | test_hand.py        | Hand detection setup & verification
+   2   | data_collection.py  | Collecting 150 samples × 24 signs (A-Y)
+   3   | utils.py            | Normalization, 6-type augmentation, hand mirror
+   4   | train_model.py      | 5-layer neural network training for 24 classes
+   5   | predict.py          | Real-time prediction, voice system, word builder
+
+================================================================================
+KEY TECHNOLOGIES USED
+================================================================================
+
+  - Python 3.10 / 3.12
+  - MediaPipe (Google)   — Hand landmark detection (21 points per hand)
+  - TensorFlow / Keras   — Building and training the neural network
+  - TFLite               — Lightweight fast version of the trained model
+  - OpenCV (cv2)         — Camera access, image display, drawing on screen
+  - NumPy                — Storing and processing numerical data
+  - pyttsx3              — Offline text-to-speech voice engine (NEW in v4)
+  - threading + queue    — Non-blocking background voice thread (NEW in v4)
+  - Scikit-learn         — Label encoding, train/test split, confusion matrix
+  - Matplotlib + Seaborn — Training graphs and 24x24 confusion matrix plot
+  - colorsys             — Generates unique HSV colors for each of 24 signs
+
+================================================================================
+HOW THE FULL SYSTEM WORKS (Simple flow)
+================================================================================
+
+  Your Hand (Left OR Right)
+      |
+      v
+  Webcam captures video frame → cv2.flip() mirrors it
+      |
+      v
+  MediaPipe detects 21 hand points → 63 raw numbers (X, Y, Z each)
+      |
+      v
+  normalize_landmarks() → wrist at (0,0,0), scaled by palm length
+      |
+      v
+  [If Left Hand] → mirror_hand() flips X-axis to match right-hand training
+      |
+      v
+  TFLite AI Model → 24 confidence scores (one per sign A-Y)
+      |
+      v
+  15-frame majority vote → stable letter selected
+      |
+      v
+  If confidence > 40% → Show letter + color + confidence bar on screen
+      |
+      v
+  If stable 12 frames → Voice system speaks the letter automatically
+
+================================================================================
+WHAT EACH OUTPUT MEANS (Terminal + Screen + Voice)
+================================================================================
+
+  TERMINAL OUTPUT:
+    "Model loaded (TFLite - fast mode)"    → Startup, model found
+    "SignBridge AI — Ready!"               → App started successfully
+    "Added: A  |  Word: 'A'"              → SPACE pressed, letter saved
+    "Deleted 'A'  |  Word: ''"            → BACKSPACE pressed
+    "Cleared (was: 'ABC')"                → C key pressed
+    "[Voice] Speaking word: 'HELLO'"      → T key pressed
+    "[Voice] Spelling word: 'HELLO'"      → R key pressed
+    "Voice turned on/off"                 → V key pressed
+    "Session ended. Final word: 'ABC'"    → Q key pressed, program quit
+
+  CAMERA WINDOW:
+    Large letter (e.g. "A")  → Current detected sign
+    "---"                    → No sign detected or confidence too low
+    Colored bar              → Confidence level (0–100%)
+    Hand skeleton            → 21 landmark points connected by lines
+    "Word: HELLO"            → Letters added so far
+    "Left Hand / Right Hand" → Which hand is detected
+
+  VOICE OUTPUT:
+    Letter name              → Auto-spoken when letter holds 12 frames
+    Word spoken              → T key
+    Letters spelled out      → R key
+    "Deleted X"              → BACKSPACE
+    "Cleared"                → C key
+    "Goodbye! Session ended" → Q key
+
+================================================================================
+BONUS — ALL FILES IN THE PROJECT
+================================================================================
+
+  File/Folder                  Size         What It Is
+  --------------------------   ----------   ------------------------------------
+  dataset/                     Folder       Stores all 24 collected sign files
+  dataset/A.npy ... E.npy      ~49 KB each  100 frames each (Phase 1 signs)
+  dataset/F.npy ... Y.npy      ~74 KB each  150 frames each (Phase 2 signs)
+  hand_landmarker.task         7.5 MB       Google MediaPipe hand detector model
+  signbridge_model.h5          2.5 MB       Our trained AI model (Keras format)
+  signbridge_model.tflite      224 KB       Our trained AI model (fast TFLite)
+  label_encoder.npy            224 bytes    Stores 24 sign names: A through Y
+  training_results.png         161 KB       Accuracy/Loss/Confusion matrix graph
+  utils.py                     7.5 KB       Normalization + augmentation helpers
+  data_collection.py           9.0 KB       Data collection script
+  train_model.py               9.3 KB       Model training script
+  predict.py                   17 KB        Main real-time prediction app
+  test_hand.py                 1.8 KB       Camera and hand detection test
+  README.md / README2.md       6-11 KB      Project setup and documentation
+  Team_Code_Explanation.txt    This file    Code explanation for team
+
+--------------------------------------------------------------------------------
+IMPORTANT FILE DETAILS:
+--------------------------------------------------------------------------------
+
+  label_encoder.npy (224 bytes)
+    - Now stores 24 class names: ['A','B','C','D','E','F','G','H','I',
+      'K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y']
+    - Note: J and Z are NOT in this list (motion-based, Phase 2)
+    - predict.py uses this to convert model's number output → letter
+
+  signbridge_model.h5 (2.5 MB)
+    - Our trained 5-layer neural network for 24 signs.
+    - Much larger than the old 5-sign model (was 800 KB).
+    - Saved automatically by ModelCheckpoint callback during training.
+
+  signbridge_model.tflite (224 KB)
+    - Compressed version of the .h5 model for fast loading.
+    - Was 70 KB for 5 signs, now 224 KB for 24 signs.
+    - Still loads 10x faster than the full Keras model.
+    - Used by predict.py at runtime.
+
+  dataset/ (24 .npy files)
+    - A through E: 100 samples each (original Phase 1)
+    - F through Y: 150 samples each (Phase 2 expansion)
+    - Total raw samples: (5 × 100) + (19 × 150) = 3,350 raw samples
+    - After ×15 augmentation: ~50,250 training samples
+
+================================================================================
+FILE SIZE SUMMARY    
+================================================================================
+
+  Largest file : hand_landmarker.task      — 7.5 MB  (Google's hand AI)
+  Second largest: signbridge_model.h5      — 2.5 MB  (our trained model)
+  Training graph: training_results.png     — 161 KB  (accuracy/loss graphs)
+  Fast AI model : signbridge_model.tflite  — 224 KB  (fast runtime model)
+  Predict app   : predict.py              — 17  KB  (main application)
+  Dataset total : ~1.87 MB (24 sign files)
+  Smallest file : label_encoder.npy        — 224 bytes (24 letter names)
+
+  TOTAL PROJECT SIZE: approximately 12-13 MB
+
+================================================================================
+PHASE COMPLETION STATUS
+================================================================================
+
+  Phase 1 — A to E (5 Signs)        [DONE]
+    - Data collected, model trained, prediction working
+
+  Phase 2 — A to Y (24 Signs)       [DONE — CURRENT STATE]
+    - All 24 sign files collected
+    - utils.py upgraded with 6 augmentation types + mirror_hand()
+    - train_model.py v3 trained 5-layer network on 24 classes
+    - predict.py v4 added voice system + both-hand support
+
+  Phase 3 — J and Z (Motion Signs)  [NOT YET STARTED]
+    - Requires video-based recognition (sequence of frames)
+    - Will need LSTM or Transformer model (different architecture)
+    - Planned for future work
+
+================================================================================
+                        END OF DOCUMENT
+================================================================================

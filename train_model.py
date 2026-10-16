@@ -1,101 +1,222 @@
+"""
+train_model.py -- SignBridge AI Training Script (v3)
+====================================================
+Upgrades over v2:
+  [+] Expanded from A-E (5 classes) to A-Y (24 static ASL signs)
+  [+] Skips J & Z (motion-based) - handled in Phase 2
+  [+] Wider entry layer (512) for better separation of similar signs
+  [+] AUG_FACTOR raised to 15 => ~2250 samples per sign
+  [+] PATIENCE raised to 30 for larger class space
+  [+] Per-class accuracy report + full 24x24 Confusion Matrix
+  [+] Auto TFLite export after training
+  [+] All training plots saved to training_results.png
+"""
+
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, confusion_matrix
+
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Input
 from tensorflow.keras.utils import to_categorical
-import matplotlib.pyplot as plt
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from tensorflow.keras.regularizers import l2
 
-# ── Load Dataset ─────────────────────────────────────────────
-DATA_DIR = "dataset"
-SIGNS = list("ABCDE")
+from utils import normalize_landmarks, augment_dataset
 
-X, y = [], []
+# ─── Config ──────────────────────────────────────────────────────────────────
+DATA_DIR    = "dataset"
+# 24 static ASL signs — J and Z are motion-based (Phase 2)
+SIGNS       = list("ABCDEFGHIKLMNOPQRSTUVWXY")
+AUG_FACTOR  = 15       # 150 raw x 15 = ~2250 samples per sign after augmentation
+TEST_SPLIT  = 0.15
+BATCH_SIZE  = 64
+MAX_EPOCHS  = 400
+PATIENCE    = 30       # higher patience for 24-class problem
+SEED        = 42
 
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
+
+print("=" * 60)
+print("  SignBridge AI — Model Training v3  (A-Y, 24 Signs)")
+print("=" * 60)
+
+# ─── 1. Load raw data ─────────────────────────────────────────────────────────
+X_raw, y_raw = [], []
 for sign in SIGNS:
     path = os.path.join(DATA_DIR, f"{sign}.npy")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing dataset file: {path}")
     data = np.load(path)
-    X.extend(data)
-    y.extend([sign] * len(data))
-    print(f"✅ Loaded {sign}: {len(data)} samples")
+    X_raw.extend(data)
+    y_raw.extend([sign] * len(data))
+    print(f"  [OK] Loaded {sign}: {len(data)} samples")
 
-X = np.array(X)
-y = np.array(y)
+X_raw = np.array(X_raw, dtype=np.float32)
+y_raw = np.array(y_raw)
+print(f"\n  Total raw samples : {len(X_raw)}")
 
-print(f"\nTotal samples: {len(X)}")
-print(f"Each sample shape: {X[0].shape}")
+# ─── 2. Normalize landmarks ───────────────────────────────────────────────────
+print("  Normalizing landmarks (wrist-relative + palm-scale)...")
+X_norm = np.array([normalize_landmarks(row) for row in X_raw], dtype=np.float32)
 
-# ── Encode Labels ─────────────────────────────────────────────
+# ─── 3. Encode labels ─────────────────────────────────────────────────────────
 le = LabelEncoder()
-y_encoded = le.fit_transform(y)
-y_categorical = to_categorical(y_encoded)
+y_int = le.fit_transform(y_raw)          # integer labels for augmentation
+print(f"  Classes: {le.classes_}")
 
-# ── Split Data ────────────────────────────────────────────────
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y_categorical, test_size=0.2, random_state=42
+# ─── 4. Augment BEFORE splitting ─────────────────────────────────────────────
+print(f"\n  Augmenting dataset ×{AUG_FACTOR}...")
+X_aug, y_aug = augment_dataset(X_norm, y_int, factor=AUG_FACTOR)
+print(f"  Augmented dataset size: {len(X_aug)} samples")
+
+# ─── 5. Train / test split ────────────────────────────────────────────────────
+X_train, X_test, y_train_int, y_test_int = train_test_split(
+    X_aug, y_aug, test_size=TEST_SPLIT, random_state=SEED, stratify=y_aug
 )
-print(f"\nTraining samples : {len(X_train)}")
-print(f"Testing  samples : {len(X_test)}")
+y_train = to_categorical(y_train_int, num_classes=len(SIGNS))
+y_test  = to_categorical(y_test_int,  num_classes=len(SIGNS))
+print(f"\n  Training samples : {len(X_train)}")
+print(f"  Testing  samples : {len(X_test)}")
 
-# ── Build Model ───────────────────────────────────────────────
+# ─── 6. Build model ───────────────────────────────────────────────────────────
+# Wider entry layer (512) gives more capacity to separate 24 similar-looking signs
 model = Sequential([
-    Dense(128, activation='relu', input_shape=(63,)),
+    Input(shape=(63,)),
+
+    Dense(512, kernel_regularizer=l2(1e-4)),
+    BatchNormalization(),
+    tf.keras.layers.Activation('relu'),
+    Dropout(0.4),
+
+    Dense(256, kernel_regularizer=l2(1e-4)),
+    BatchNormalization(),
+    tf.keras.layers.Activation('relu'),
+    Dropout(0.35),
+
+    Dense(128, kernel_regularizer=l2(1e-4)),
+    BatchNormalization(),
+    tf.keras.layers.Activation('relu'),
     Dropout(0.3),
-    Dense(64, activation='relu'),
-    Dropout(0.3),
-    Dense(32, activation='relu'),
-    Dense(len(SIGNS), activation='softmax')
-])
+
+    Dense(64, kernel_regularizer=l2(1e-4)),
+    BatchNormalization(),
+    tf.keras.layers.Activation('relu'),
+    Dropout(0.25),
+
+    Dense(32, kernel_regularizer=l2(1e-4)),
+    BatchNormalization(),
+    tf.keras.layers.Activation('relu'),
+    Dropout(0.2),
+
+    Dense(len(SIGNS), activation='softmax'),
+], name="SignBridge_v3")
 
 model.compile(
-    optimizer='adam',
+    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
     loss='categorical_crossentropy',
     metrics=['accuracy']
 )
 
 model.summary()
 
-# ── Train ─────────────────────────────────────────────────────
-print("\n🚀 Training started...")
+# ─── 7. Callbacks ─────────────────────────────────────────────────────────────
+callbacks = [
+    EarlyStopping(
+        monitor='val_accuracy', patience=PATIENCE,
+        restore_best_weights=True, verbose=1
+    ),
+    ReduceLROnPlateau(
+        monitor='val_loss', factor=0.5, patience=10,
+        min_lr=1e-6, verbose=1
+    ),
+    ModelCheckpoint(
+        "signbridge_model.h5", monitor='val_accuracy',
+        save_best_only=True, verbose=1
+    ),
+]
+
+# ─── 8. Train ─────────────────────────────────────────────────────────────────
+print("\n>> Training started...\n")
 history = model.fit(
     X_train, y_train,
-    epochs=50,
-    batch_size=32,
+    epochs=MAX_EPOCHS,
+    batch_size=BATCH_SIZE,
     validation_data=(X_test, y_test),
+    callbacks=callbacks,
     verbose=1
 )
 
-# ── Evaluate ──────────────────────────────────────────────────
+# ─── 9. Evaluate ──────────────────────────────────────────────────────────────
+# Load best weights (already restored by EarlyStopping)
 loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
-print(f"\n✅ Test Accuracy: {accuracy * 100:.2f}%")
+print(f"\n{'='*60}")
+print(f"  [+] Test Accuracy : {accuracy * 100:.2f}%")
+print(f"  [+] Test Loss     : {loss:.4f}")
+print(f"{'='*60}\n")
 
-# ── Save Model & Labels ───────────────────────────────────────
-model.save("signbridge_model.h5")
+# Per-class report
+y_pred_probs = model.predict(X_test, verbose=0)
+y_pred       = np.argmax(y_pred_probs, axis=1)
+print(classification_report(y_test_int, y_pred, target_names=le.classes_))
+
+# ─── 10. Save model & labels ──────────────────────────────────────────────────
 np.save("label_encoder.npy", le.classes_)
-print("✅ Model saved as signbridge_model.h5")
-print("✅ Labels saved as label_encoder.npy")
+print("[OK] Labels saved as label_encoder.npy")
 
-# ── Plot Accuracy Graph ───────────────────────────────────────
-plt.figure(figsize=(10, 4))
-plt.subplot(1, 2, 1)
-plt.plot(history.history['accuracy'], label='Train')
-plt.plot(history.history['val_accuracy'], label='Validation')
-plt.title('Model Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.legend()
+# ─── 11. Plot results ─────────────────────────────────────────────────────────
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+fig.suptitle("SignBridge AI — Training Results (v2)", fontsize=16, fontweight='bold')
 
-plt.subplot(1, 2, 2)
-plt.plot(history.history['loss'], label='Train')
-plt.plot(history.history['val_loss'], label='Validation')
-plt.title('Model Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
+# Accuracy curve
+ax = axes[0]
+ax.plot(history.history['accuracy'],     label='Train', linewidth=2)
+ax.plot(history.history['val_accuracy'], label='Validation', linewidth=2, linestyle='--')
+ax.set_title('Accuracy')
+ax.set_xlabel('Epoch')
+ax.set_ylabel('Accuracy')
+ax.legend()
+ax.grid(alpha=0.3)
+
+# Loss curve
+ax = axes[1]
+ax.plot(history.history['loss'],     label='Train', linewidth=2, color='tomato')
+ax.plot(history.history['val_loss'], label='Validation', linewidth=2, linestyle='--', color='darkorange')
+ax.set_title('Loss')
+ax.set_xlabel('Epoch')
+ax.set_ylabel('Loss')
+ax.legend()
+ax.grid(alpha=0.3)
+
+# Confusion matrix — 24x24 needs smaller font
+ax = axes[2]
+cm = confusion_matrix(y_test_int, y_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=le.classes_, yticklabels=le.classes_, ax=ax,
+            annot_kws={"size": 7})
+ax.set_title('Confusion Matrix (24 Signs)')
+ax.set_xlabel('Predicted')
+ax.set_ylabel('Actual')
+ax.tick_params(axis='both', labelsize=8)
 
 plt.tight_layout()
-plt.savefig("training_results.png")
+plt.savefig("training_results.png", dpi=150, bbox_inches='tight')
 plt.show()
-print("✅ Graph saved as training_results.png")
+print("[OK] Graph saved as training_results.png")
+
+# ── Export TFLite (fast runtime model) ───────────────────────────────────────
+print("\n>> Converting to TFLite...")
+converter = tf.lite.TFLiteConverter.from_keras_model(model)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_model = converter.convert()
+with open("signbridge_model.tflite", "wb") as f:
+    f.write(tflite_model)
+print(f"[OK] TFLite model saved — {len(tflite_model)//1024} KB")
+print("\nTraining complete! Run predict.py to test.")

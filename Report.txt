@@ -1,0 +1,684 @@
+================================================================================
+                           SIGNBRIDGE AI: PROJECT REPORT
+ Real-Time Sign Language Recognition and Speech Synthesis System (ASL & ISL)
+================================================================================
+
+
+================================================================================
+SECTION 1: REQUIREMENT ANALYSIS
+================================================================================
+
+1.1 REQUIREMENT GATHERING
+-------------------------
+Requirement gathering for the SignBridge AI project was carried out through domain 
+analysis, literature review of existing assistive technologies, and analysis of 
+the communication barriers faced by the Deaf and Hard-of-Hearing (DHH) community.
+
+                    ┌────────────────────────────────────────────────────────┐
+                    │               REQUIREMENT GATHERING PHASES              │
+                    └────────────────────────────────────────────────────────┘
+                                                │
+         ┌──────────────────────┬───────────────┴──────────────┬──────────────────────┐
+         ▼                      ▼                              ▼                      ▼
+┌──────────────────┐  ┌───────────────────┐  ┌────────────────────┐  ┌───────────────────┐
+│ 1. STAKEHOLDER   │  │ 2. DOMAIN & SIGN  │  │ 3. FEASIBILITY &   │  │ 4. GAP ANALYSIS   │
+│    IDENTIFICATION│  │    LINGUISTICS    │  │    HARDWARE STUDY  │  │    OF PRIOR WORK  │
+└──────────────────┘  └───────────────────┘  └────────────────────┘  └───────────────────┘
+
+1. Identification of Stakeholders and Target Beneficiaries:
+   * Primary Users: Hearing- and speech-impaired individuals who utilize sign 
+     language as their native or primary mode of interaction.
+   * Secondary Users: General hearing individuals, educators, service personnel, 
+     healthcare workers, and bank clerks who lack sign language literacy and 
+     require an intuitive translation bridge.
+   * Tertiary Stakeholders: System administrators and researchers deploying edge-AI 
+     assistive solutions in public kiosks, educational institutions, or smart 
+     home devices.
+
+2. Domain Exploration and Sign Language Characteristics:
+   * Bilingual Sign Modalities: Research revealed that users require support for 
+     both American Sign Language (ASL) (predominantly single-handed fingerspelling) 
+     and Indian Sign Language (ISL) (predominantly dual-handed postures).
+   * Static vs. Dynamic Signs: ASL fingerspelling consists of 24 static postures 
+     (A-Y, excluding J and Z), while J (a pinky-tracing stroke) and Z (an 
+     index-tracing zigzag) are dynamic motion gestures over time. Conversely, 
+     ISL treats all 26 alphabetic characters (A-Z) as postures, many requiring 
+     simultaneous dual-hand keypoints.
+   * Hand Ambiguity and Visual Occlusion: Finger-spelling exhibits confusable pairs 
+     where fine finger positioning matters (e.g., M vs. N, U vs. V, G vs. Q). 
+     Occlusion of fingers by the palm or neighbouring fingers occurs frequently.
+
+3. Feasibility and Hardware Constraints:
+   * Sensorless Vision vs. Sensor Gloves: Traditional dataglove solutions require 
+     costly, fragile, and intrusive electronic hardware. Gathering requirements 
+     established that the system must rely exclusively on commodity RGB webcams 
+     without specialized depth sensors (LiDAR/ToF).
+   * Edge / Local Execution: Cloud-dependent APIs introduce unpredictable network 
+     latency (200–800 ms), privacy risks (streaming personal video feeds to remote 
+     servers), and connectivity dependencies. The system was required to run 
+     strictly on local client CPU hardware.
+
+4. Gap Analysis of Prior Systems:
+   * Existing solutions typically:
+     a) Only recognize static signs and ignore dynamic motion signs (J and Z).
+     b) Cause low frame rates (10-15 FPS) by invoking heavy convolutional 
+        networks (2-10 MB .h5 models) per frame.
+     c) Lack immediate speech feedback, forcing both communicators to stare at 
+        a monitor screen.
+     d) Break if the user is left-handed, moves farther from the camera, or 
+        rotates their wrist.
+
+
+1.2 REQUIREMENT SPECIFICATION
+-----------------------------
+
+1. Functional Requirements (FR):
+   - FR-1 (Real-Time Hand Landmark Extraction): The system shall capture camera 
+     video frames and track 21 three-dimensional (x, y, z) hand landmarks (63 
+     values per hand) using Google MediaPipe in asynchronous LIVE_STREAM mode.
+   - FR-2 (Coordinate Invariance Normalization): Landmark vectors must be 
+     preprocessed using wrist-translation and palm-scale division to guarantee 
+     scale, position, and camera-distance invariance.
+   - FR-3 (Static ASL Alphabet Classification): The system must classify 24 
+     static ASL postures (A-Y, excluding J, Z) with an inference latency below 15 ms.
+   - FR-4 (Key-Triggered Dynamic Motion Classification): The system shall capture 
+     a temporal sequence of 30 consecutive frames (30 x 63) upon pressing the 'M' 
+     key and classify dynamic signs (J and Z) using a recurrent model.
+   - FR-5 (Dual-Hand ISL Alphabet Classification): The system must detect both 
+     hands simultaneously (126-dimensional input vector) and classify all 26 ISL 
+     signs (A-Z) when ISL mode is active.
+   - FR-6 (Bilateral Hand Parity): Handedness metadata must be evaluated 
+     dynamically; when a left hand is detected, its horizontal (X) coordinates 
+     must be automatically inverted (mirror_hand) to match right-hand trained models.
+   - FR-7 (Temporal Smoothing & Jitter Filter): Frame predictions must pass 
+     through a rolling 20-frame weighted majority-vote buffer to eliminate visual 
+     flickering and false transients.
+   - FR-8 (Word Building & Sentence Formulation): The user must be able to append 
+     stable predictions into words (SPACE), backspace characters (BKSP), clear 
+     words (C), and trigger full-word audio readback (T, R).
+   - FR-9 (Non-Blocking Offline Speech Synthesis): The application must vocalize 
+     stabilized characters, spelled sequences, and words through an offline 
+     Text-to-Speech (TTS) engine running on a dedicated background thread without 
+     delaying video rendering.
+   - FR-10 (Multilingual Mode Toggle): The runtime interface must allow immediate 
+     toggling between ASL and ISL classification engines using a hotkey ('L').
+
+2. Non-Functional Requirements (NFR):
+   - NFR-1 (Performance & Throughput): The end-to-end video pipeline must sustain 
+     >= 30 FPS on a modern multi-core CPU. Per-frame classification latency must 
+     not exceed 10 ms.
+   - NFR-2 (Compact Footprint): Deployment models must be converted and quantized 
+     via TensorFlow Lite (TFLite) to restrict memory footprint to < 300 KB per model.
+   - NFR-3 (Availability & Zero Internet Dependency): All vision, inference, and 
+     text-to-speech modules must operate 100% offline without outbound API queries.
+   - NFR-4 (Ergonomic Visual Feedback): An interactive Heads-Up Display (HUD) must 
+     overlay skeleton joints, unique per-sign HSV color outlines, a percentage 
+     confidence bar, language badges, and word buffers with alpha-blended transparency.
+   - NFR-5 (High Predictive Reliability): The classification system must achieve 
+     >= 95% test accuracy on static classes and reject predictions falling below a 
+     45% confidence threshold.
+   - NFR-6 (Fault Tolerance & Graceful Degradation): The system must tolerate 
+     camera disconnects or frame drops (up to 30 consecutive frames) without 
+     crashing, displaying user recovery guidance.
+
+3. System Hardware and Software Specifications:
+   ┌────────────────────────────────────┬────────────────────────────────────┐
+   │        HARDWARE ENVIRONMENT        │        SOFTWARE ENVIRONMENT        │
+   ├────────────────────────────────────┼────────────────────────────────────┤
+   │ • Processor: Intel/AMD x86_64 CPU  │ • OS: Windows 10/11 64-bit         │
+   │ • RAM: Minimum 4 GB (8 GB rec.)    │ • Language: Python 3.10 / 3.12     │
+   │ • Camera: Standard 720p/1080p      │ • DL Framework: TensorFlow & Keras │
+   │   webcam at 30 FPS                 │ • Vision: Google MediaPipe 0.10.x  │
+   │ • Audio: Stereo Sound Output       │ • Imaging & HUD: OpenCV 4.x        │
+   │ • GPU: Optional (CPU edge-first)   │ • Voice Engine: pyttsx3 (SAPI5)   │
+   └────────────────────────────────────┴────────────────────────────────────┘
+
+
+================================================================================
+SECTION 2: IMPLEMENTATION
+================================================================================
+
+2.1 ENVIRONMENTAL SETTING FOR RUNNING THE PROJECT
+-------------------------------------------------
+1. Hardware Configuration:
+   - Processor: Intel Core i5/i7 or AMD Ryzen 5/7 (x86_64 multi-core processor).
+   - Memory (RAM): 4 GB minimum (8 GB recommended).
+   - Video Device: Standard USB webcam or built-in camera supporting 30 FPS at 
+     640x480 or 1280x720.
+   - Audio Device: Onboard sound card and speakers/headphones.
+   - Hardware Acceleration: CPU edge-first optimization; no dedicated GPU/CUDA needed.
+
+2. Operating System & Platform Configuration:
+   - OS: Microsoft Windows 10 / Windows 11 (64-bit architecture).
+   - Audio Subsystem: Microsoft Speech API 5 (SAPI5) utilized via pywin32 COM interface.
+   - Shell: Windows PowerShell / Command Prompt.
+
+3. Software Dependencies & Runtime Versions:
+   - Python: Version 3.10.11 or 3.12.10
+   - TensorFlow: Version 2.21.0 (Deep Learning backend and TFLite execution)
+   - Keras: Version 3.13.2 (Neural network modeling and callbacks)
+   - MediaPipe: Version 0.10.32 (Google Vision Tasks HandLandmarker)
+   - OpenCV (opencv-python): Version 4.13.0.92 (Camera streaming, HUD rendering)
+   - NumPy: Version 2.4.3 (Matrix computations and array persistence)
+   - pyttsx3: Version 2.91 (Offline text-to-speech)
+   - pywin32 / pypiwin32: Version 306 / 223 (Windows SAPI5 voice bindings)
+   - scikit-learn: Version 1.8.0 (Stratified splitting, label encoding, metrics)
+   - Matplotlib: Version 3.10.8 (Loss and accuracy curve generation)
+   - Seaborn: Version 0.13.2 (Confusion matrix heatmaps)
+
+4. Pre-Trained Weights, Task Assets, and Metadata:
+   - hand_landmarker.task: 7.5 MB pre-compiled MediaPipe hand model.
+   - signbridge_model.h5 & signbridge_model.tflite: 24-class static ASL model 
+     (2.5 MB Keras vs. 224 KB TFLite).
+   - motion_model.h5 & motion_model.tflite: Dynamic ASL motion model for J and Z 
+     (3.3 MB Keras vs. 312 KB TFLite).
+   - isl_model.h5 & isl_model.tflite: 26-class dual-hand ISL model (2.8 MB vs. 251 KB).
+   - label_encoder.npy, motion_label_encoder.npy, isl_label_encoder.npy: Class 
+     mapping arrays.
+
+5. Runtime Environment Setup & Execution Protocol:
+   - Step 1: Create virtual environment: py -3.10 -m venv signbridge_env
+   - Step 2: Activate virtual environment: signbridge_env\Scripts\activate
+   - Step 3: Install dependencies: 
+     pip install opencv-python mediapipe tensorflow numpy scikit-learn matplotlib seaborn pyttsx3 pywin32
+   - Step 4: Verification test: python test_hand.py
+   - Step 5: Run real-time application: python predict.py
+
+
+2.2 DETAILED DESCRIPTION OF METHODS
+-----------------------------------
+
+                                END-TO-END METHODOLOGY PIPELINE
+                                
+  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────────────┐
+  │ 1. VIDEO     │ ──> │ 2. MEDIAPIPE │ ──> │ 3. GEOMETRIC │ ──> │ 4. RUNTIME MIRRORING │
+  │    CAPTURE   │     │    TRACKING  │     │    NORMALIZ. │     │    (LEFT HAND -> X)  │
+  └──────────────┘     └──────────────┘     └──────────────┘     └──────────────────────┘
+                                                                            │
+                                ┌───────────────────────────────────────────┴──────────┐
+                                ▼                                                      ▼
+                    ┌─────────────────────────┐                            ┌────────────────────────┐
+                    │ 5A. ASL STATIC (A-Y)    │                            │ 5B. ASL MOTION (J & Z) │
+                    │     5-Layer Deep MLP    │                            │     Bidirectional LSTM │
+                    └─────────────────────────┘                            └────────────────────────┘
+                                │                                                      │
+                                └───────────────────────────┬──────────────────────────┘
+                                                            ▼
+                                                ┌───────────────────────┐
+                                                │ 6. TEMPORAL WEIGHTED  │
+                                                │    MAJORITY SMOOTHING │
+                                                └───────────────────────┘
+                                                            │
+                                        ┌───────────────────┴───────────────────┐
+                                        ▼                                       ▼
+                            ┌───────────────────────┐               ┌───────────────────────┐
+                            │ 7. MULTI-THREADED     │               │ 8. INTERACTIVE HUD &  │
+                            │    TTS VOICE ENGINE   │               │    WORD BUILDER       │
+                            └───────────────────────┘               └───────────────────────┘
+
+1. Computer Vision Sensing and Landmark Extraction:
+   - Captures frames from webcam via cv2.VideoCapture(0) at 640x480 resolution.
+   - Flips image horizontally (cv2.flip(frame, 1)) for an intuitive mirror display.
+   - Employs Google MediaPipe's HandLandmarker in LIVE_STREAM mode.
+   - Extracts 21 3D topological joints (wrist, thumb joints, and 4 joints per 
+     finger: MCP, PIP, DIP, Tip), yielding 63 raw float coordinates (x, y, z) per hand.
+
+       [4] Tip           [8] Tip         [12] Tip        [16] Tip        [20] Tip
+          \                 |               |               |               /
+        [3] IP           [7] DIP         [11] DIP        [15] DIP        [19] DIP
+           \                |               |               |               /
+        [2] MCP          [6] PIP         [10] PIP        [14] PIP        [18] PIP
+            \               |               |               |               /
+          [1] CMC        [5] MCP         [9] MCP         [13] MCP        [17] MCP
+             \              \               |               /              /
+              └──────────────┴──────────────┴───────────────┴─────────────┘
+                                            │
+                                        [0] WRIST (Origin Reference)
+
+2. Coordinate Geometry and Normalization Mathematics:
+   Raw landmark coordinates are sensitive to hand placement and distance from lens.
+   The function normalize_landmarks() performs two transformations:
+   a) Translation Invariance (Wrist Centering):
+      The wrist landmark (index 0) becomes the origin (0, 0, 0). All points are translated:
+      P_i' = P_i - P_wrist,  for i in {0, ..., 20}
+   b) Scale Invariance (Palm-Length Normalization):
+      Computes the Euclidean distance between wrist (0) and middle finger MCP base (9):
+      d_palm = ||P_9'||_2 = sqrt( (x_9')^2 + (y_9')^2 + (z_9')^2 )
+      All translated points are scaled by d_palm:
+      P_hat_i = P_i' / (d_palm + 1e-6)
+      This makes the resulting 63-dimensional vector completely scale- and position-invariant.
+
+3. Bilateral Hand Parity (Runtime Hand Mirroring):
+   The model is trained on dominant right-hand shapes. When MediaPipe identifies a 
+   left hand (handedness == "Right" in mirrored frame), mirror_hand() negates the X-axis:
+   x_hat_i <-- -x_hat_i,  for i in {0, ..., 20}
+   Because coordinates are centered at x=0, this converts a left-hand posture into 
+   an exact right-hand equivalent at zero computational cost.
+
+4. Synthetic Data Augmentation Pipeline (6-Fold Transformation):
+   Expands the dataset by a factor of 15 (~50,000+ samples) via 6 transformations:
+   - Gaussian Noise: Simulates sensor jitter (sigma = 0.015).
+   - Scale Jittering: Simulates anatomical distance variation (factor ~ Uniform(0.85, 1.15)).
+   - 2D In-Plane Rotation: Simulates wrist tilt up to +/- 15 degrees.
+   - Perspective Shear Warp: Simulates camera angle shifts to separate confusable pairs (G/Q, M/N).
+   - Finger Dropout Masking: Randomly drops landmark indices (prob = 0.08) to model occlusion.
+   - Hand Mirroring: Duplicates dataset with inverted X coordinates to teach bilateral hands.
+
+5. Deep Neural Network Architectures:
+   - ASL Static Classifier (SignBridge_v3):
+     Input (63) -> Dense(512) -> BatchNorm -> ReLU -> Dropout(0.40)
+                -> Dense(256) -> BatchNorm -> ReLU -> Dropout(0.35)
+                -> Dense(128) -> BatchNorm -> ReLU -> Dropout(0.30)
+                -> Dense(64)  -> BatchNorm -> ReLU -> Dropout(0.25)
+                -> Dense(32)  -> BatchNorm -> ReLU -> Dropout(0.20)
+                -> Dense(24, softmax) -> Classes A-Y (excluding J, Z).
+     Regularization: L2 regularization (1e-4) on all dense layers. Total parameters: ~212,000.
+   - ASL Dynamic Motion Classifier (SignBridge_Motion_LSTM):
+     Input (30, 63) -> Bidirectional LSTM (128 units, return_sequences=True)
+                    -> BatchNorm -> Dropout(0.30)
+                    -> LSTM (64 units) -> BatchNorm -> Dropout(0.30)
+                    -> Dense (32, ReLU) -> BatchNorm -> Dropout(0.20)
+                    -> Dense (2, softmax) -> Classes J and Z.
+   - ISL Dual-Hand Classifier (SignBridge_ISL):
+     Input (126) -> Dense(512) -> Dropout(0.40) -> Dense(256) -> Dropout(0.30)
+                 -> Dense(128) -> Dropout(0.30) -> Dense(64) -> Dense(26, softmax).
+
+6. Multi-Threaded Non-Blocking Speech Synthesis:
+   - Standard pyttsx3 calls block OpenCV execution, dropping FPS to < 3.
+   - Implemented a producer-consumer daemon thread (_tts_worker) consuming a queue.Queue.
+   - Calling speak(text, flush=True) drains any stale pending speech instantly, preventing 
+     backlog during rapid hand movements.
+
+
+2.3 IMPLEMENTATION DETAILS
+--------------------------
+1. File Organization and System Responsibilities:
+   - test_hand.py: Camera diagnostic and MediaPipe tracking verification.
+   - data_collection.py: Interactive recording for 24 static ASL signs (150 samples/sign).
+   - motion_data_collection.py: 30-frame sequence recording for dynamic ASL signs (J, Z).
+   - isl_data_collection.py: Dual-hand recording for 26 ISL signs (200 samples/sign).
+   - utils.py: Normalization, bilateral mirroring, and 6-fold augmentation functions.
+   - train_model.py: Training, evaluation, and TFLite export for static ASL.
+   - train_motion_model.py: Training, evaluation, and TFLite export for dynamic LSTM.
+   - train_isl_model.py: Training, evaluation, and TFLite export for dual-hand ISL.
+   - predict.py: Real-time user interface, inference pipeline, smoothing, and TTS voice.
+
+2. TFLite Conversion and Model Optimization:
+   - Models are exported using tf.lite.TFLiteConverter with tf.lite.Optimize.DEFAULT.
+   - Model size reduced from 2.5 MB (.h5) to 224 KB (.tflite) (>90% reduction).
+   - Inference latency on standard CPU reduced to < 2 ms per frame.
+
+3. Temporal Smoothing and Moving-Window Buffer:
+   - Rolling buffer of W = 20 frames.
+   - Computes linearly weighted majority vote:
+     Weight(i) = 1.0 + (i * 0.15),  where i is frame index (0 to 19).
+   - Confidence computed as weighted average of last 20 frames.
+   - Minimum threshold: Rejects predictions below 45.0% confidence.
+
+4. Key-Triggered Motion State Machine:
+   - To prevent false positives (hallucinations) during neutral movement, motion 
+     detection is triggered by pressing the 'M' key.
+   - Records exactly 30 frames with an orange on-screen progress bar.
+   - Normalizes per frame, passes sequence to motion LSTM model, and displays result 
+     for 1 second with voice announcement.
+
+
+2.4 ALGORITHMIC DESCRIPTION OF EACH MODULE
+------------------------------------------
+
+Algorithm 1: Real-Time Hand Landmark Extraction & Verification
+--------------------------------------------------------------
+Input: Video feed from camera device index 0
+Output: Verified 21-point hand landmark coordinates
+
+1. Initialize MediaPipe BaseOptions with "hand_landmarker.task"
+2. Configure HandLandmarkerOptions:
+     running_mode <- LIVE_STREAM
+     num_hands <- 2
+     result_callback <- save_result
+3. Open camera stream: cap <- cv2.VideoCapture(0)
+4. While cap is active:
+     a. Read frame from cap
+     b. If read fails, break
+     c. Flip frame horizontally: frame <- cv2.flip(frame, 1)
+     d. Convert BGR color space to RGB: rgb <- cv2.cvtColor(frame, BGR2RGB)
+     e. Wrap into MediaPipe Image object: mp_image <- mp.Image(SRGB, rgb)
+     f. Send asynchronous detection: landmarker.detect_async(mp_image, timestamp)
+     g. If latest_result contains hand_landmarks:
+          For each landmark point (x, y) in hand:
+              Compute pixel coordinates: px <- x * width, py <- y * height
+              Render circular marker: cv2.circle(frame, (px, py), radius=5, green)
+     h. Render frame window; check for key 'q' to break
+5. Release cap and destroy OpenCV windows
+
+
+Algorithm 2: Landmark Geometric Normalization & Hand Mirroring
+--------------------------------------------------------------
+Input: Raw landmark vector R of dimension 63 (21 points x, y, z), Handedness H
+Output: Invariant landmark vector N of dimension 63
+
+1. Reshape R into matrix P of shape (21, 3)
+2. Extract wrist coordinates: P_wrist <- P[0]
+3. Center coordinates relative to wrist:
+     For i from 0 to 20:
+         P[i] <- P[i] - P_wrist
+4. Compute palm reference scale:
+     d_palm <- sqrt(P[9][0]^2 + P[9][1]^2 + P[9][2]^2)
+5. If d_palm > 1e-6:
+     For i from 0 to 20:
+         P[i] <- P[i] / d_palm
+6. If H is "Right" (corresponding to user's left hand in flipped frame):
+     For i from 0 to 20:
+         P[i][0] <- -P[i][0]    // Invert X coordinate
+7. Return flattened array N of length 63
+
+
+Algorithm 3: 6-Fold Synthetic Data Augmentation
+-----------------------------------------------
+Input: Normalized landmark matrix X of shape (N, 63), Label vector y of shape (N,), Factor k
+Output: Augmented matrices X_aug, y_aug
+
+1. Initialize list X_list <- [X], y_list <- [y]
+2. Generate mirrored base set:
+     X_mirrored <- [mirror_hand(sample) for sample in X]
+     Append X_mirrored to X_list; Append y to y_list
+3. Available operations: ops <- {Noise, Scale, Rotate, Warp, Dropout, Mirror}
+4. For iteration from 1 to (k - 1):
+     Initialize batch_aug <- []
+     For each sample vector S in X:
+         Copy S_temp <- S
+         Randomly select m operations from ops where m in {1, 2, 3}
+         For each chosen op:
+             If op == Noise:   S_temp <- S_temp + Normal(0, 0.015)
+             If op == Scale:   S_temp <- S_temp * Uniform(0.85, 1.15)
+             If op == Rotate:  S_temp <- Rotate_2D(S_temp, angle in [-15°, +15°])
+             If op == Warp:    S_temp <- Perspective_Shear(S_temp, strength=0.08)
+             If op == Dropout: S_temp[random_indices with prob 0.08] <- 0.0
+             If op == Mirror:  S_temp <- mirror_hand(S_temp)
+         Append S_temp to batch_aug
+     Append batch_aug to X_list; Append y to y_list
+5. Concatenate all batches: X_aug <- Concat(X_list), y_aug <- Concat(y_list)
+6. Return X_aug, y_aug
+
+
+Algorithm 4: Static Sign Classification and Training
+----------------------------------------------------
+Input: Dataset directory with .npy files for classes A-Y
+Output: Trained model signbridge_model.h5, TFLite file, label encoder
+
+1. Load all raw files {sign}.npy from dataset/; concatenate into X_raw, y_raw
+2. Normalize all samples using Algorithm 2: X_norm <- [Normalize(s) for s in X_raw]
+3. Fit LabelEncoder on y_raw -> integer labels y_int
+4. Augment dataset using Algorithm 3 with factor 15: X_aug, y_aug <- Augment(X_norm, y_int, 15)
+5. Split into stratified subsets: (X_train, X_test, y_train, y_test) with test_ratio=0.15
+6. Construct sequential network:
+     Dense(512) -> BatchNorm -> ReLU -> Dropout(0.40)
+     Dense(256) -> BatchNorm -> ReLU -> Dropout(0.35)
+     Dense(128) -> BatchNorm -> ReLU -> Dropout(0.30)
+     Dense(64)  -> BatchNorm -> ReLU -> Dropout(0.25)
+     Dense(32)  -> BatchNorm -> ReLU -> Dropout(0.20)
+     Dense(24, activation='softmax')
+7. Compile with Adam optimizer (lr=0.001) and categorical_crossentropy loss
+8. Fit model with callbacks:
+     EarlyStopping (patience=30, restore_best_weights=True)
+     ReduceLROnPlateau (factor=0.5, patience=10)
+     ModelCheckpoint ("signbridge_model.h5")
+9. Convert trained model to TFLite with DEFAULT optimization; save signbridge_model.tflite
+
+
+Algorithm 5: Temporal Dynamic Motion Recognition
+------------------------------------------------
+Input: Sequence array S of shape (30, 63)
+Output: Predicted motion class in {'J', 'Z'}, confidence score
+
+1. Load motion_model.tflite interpreter
+2. Allocate input tensor with shape (1, 30, 63)
+3. Set input tensor value <- S
+4. Invoke interpreter
+5. Retrieve output tensor probs of shape (1, 2)
+6. class_index <- argmax(probs[0])
+7. confidence <- probs[0][class_index] * 100.0
+8. Return motion_classes[class_index], confidence
+
+
+Algorithm 6: Dual-Hand ISL Landmark Extraction & Prediction
+-----------------------------------------------------------
+Input: MediaPipe multi-hand result structure
+Output: ISL character prediction, confidence score
+
+1. If result has no hand landmarks: Return ("", 0.0)
+2. Initialize right_raw <- zeros(63), left_raw <- zeros(63), left_present <- False
+3. For each detected hand i from 0 to len(result.hand_landmarks) - 1:
+     Extract 63 coordinates from result.hand_landmarks[i]
+     If handedness label is "Left":    // Corresponds to user's right hand in mirrored frame
+         right_raw <- coordinates
+     Else:
+         left_raw <- coordinates
+         left_present <- True
+4. Normalize right_raw and left_raw independently using Algorithm 2
+5. If left_present is True:
+     left_normalized <- mirror_hand(left_normalized)
+6. Concatenate vectors: isl_vector <- [right_normalized, left_normalized] (dimension 126)
+7. Feed isl_vector into ISL TFLite interpreter; invoke model
+8. Return argmax class and confidence percentage
+
+
+Algorithm 7: Temporal Weighted Majority-Vote Smoothing
+-------------------------------------------------------
+Input: Stream of instantaneous predictions {letter_t, conf_t}, Buffer size W=20
+Output: Stabilized output character, smoothed confidence
+
+1. Append letter_t to prediction_buf (size W)
+2. Append conf_t to conf_buf (size W)
+3. Initialize weighted_votes dictionary
+4. For index i from 0 to len(prediction_buf) - 1:
+     weight <- 1.0 + (i * 0.15)
+     char <- prediction_buf[i]
+     weighted_votes[char] <- weighted_votes[char] + weight
+5. winning_char <- character with maximum score in weighted_votes
+6. Compute weighted confidence:
+     weights_array <- [1.0 + i * 0.15 for i in range(len(conf_buf))]
+     avg_conf <- sum(conf_buf[i] * weights_array[i]) / sum(weights_array)
+7. If avg_conf < MIN_CONFIDENCE (45.0%):
+     Return "---", avg_conf
+8. Else:
+     Return winning_char, avg_conf
+
+
+Algorithm 8: Asynchronous Non-Blocking Text-to-Speech Synthesis
+---------------------------------------------------------------
+Input: Speech request text, boolean flag flush
+Shared Resources: _tts_queue (FIFO Queue), _tts_thread (Daemon Worker)
+
+1. Procedure _tts_worker():
+     Initialize pyttsx3 engine
+     Set voice speed rate <- 165 words/min
+     Select preferred voice ("Zira" or "David" if available)
+     While True:
+         message <- _tts_queue.get()
+         If message is None: Break (shutdown signal)
+         Execute engine.say(message)
+         Execute engine.runAndWait()
+
+2. Procedure speak(text, flush):
+     If voice_toggle is False: Return
+     If flush is True:
+         While _tts_queue is not empty:
+             Discard pending messages from _tts_queue
+     Push text into _tts_queue
+
+
+================================================================================
+SECTION 3: INTEGRATION AND TESTING
+================================================================================
+
+3.1 DESCRIPTION OF THE INTEGRATION MODULES
+------------------------------------------
+
+                           SYSTEM INTEGRATION TOPOLOGY
+                           
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │             MODULE 1: VIDEO INGESTION & VISION SENSING                 │
+   │  • OpenCV VideoCapture (Index 0)       • Asynchronous MediaPipe Tasks  │
+   │  • Horizontal Frame Mirroring          • 21 3D Landmark Extractor      │
+   └────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │         MODULE 2: GEOMETRIC PREPROCESSING & NORMALIZATION ENGINE       │
+   │  • Wrist-Centering Translation         • Left-Hand X-Axis Inversion    │
+   │  • Palm Euclidean Scale Division       • Dual-Hand 126-Dim Concatenat. │
+   └────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │            MODULE 3: HYBRID DUAL-ENGINE INFERENCE SUBSYSTEM            │
+   │  ┌───────────────────────┐ ┌───────────────────────┐ ┌────────────────┐│
+   │  │ ASL Static Classifier │ │ ASL Motion Classifier │ │ ISL Classifier ││
+   │  │ (TFLite, 24 Classes)  │ │ (LSTM, J & Z Classes) │ │ (126-d, 26 Cls)││
+   │  └───────────────────────┘ └───────────────────────┘ └────────────────┘│
+   └────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │       MODULE 4: TEMPORAL SMOOTHING & DECISION BUFFER MODULE            │
+   │  • 20-Frame Weighted Deque Buffer      • Min Confidence Gate (>=45%)   │
+   │  • Majority-Vote Jitter Eliminator     • 10-Frame TTS Lock-In Gate     │
+   └────────────────────────────────────────────────────────────────────────┘
+                                       │
+                    ┌──────────────────┴──────────────────┐
+                    ▼                                     ▼
+   ┌─────────────────────────────────┐   ┌──────────────────────────────────┐
+   │ MODULE 5: INTERACTIVE HUD &     │   │ MODULE 6: ASYNCHRONOUS SPEECH    │
+   │           WORD COMPOSITION      │   │           SYNTHESIS DAEMON       │
+   │ • Alpha-blended Top HUD Panel   │   │ • Producer-Consumer Queue        │
+   │ • Dynamic HSV Skeletal Overlay  │   │ • Background Worker Daemon Thread│
+   │ • Word Builder & Keyboard State │   │ • Automatic Queue Flush on Move  │
+   └─────────────────────────────────┘   └──────────────────────────────────┘
+
+1. Module 1: Video Ingestion & Vision Sensing Module
+   - Input gateway capturing webcam feed via cv2.VideoCapture(0).
+   - Mirrors image horizontally and submits frames to MediaPipe Tasks HandLandmarker 
+     in LIVE_STREAM mode.
+   - Yields timestamped raw video frames and asynchronous landmark structs.
+
+2. Module 2: Geometric Preprocessing & Normalization Engine
+   - Transforms pixel space to invariant coordinate space.
+   - Centers landmarks at wrist, scales by Euclidean palm length, checks handedness, 
+     and mirrors X-axis for left hands.
+   - Concatenates dual hands for ISL (126-dim).
+
+3. Module 3: Hybrid Dual-Engine Inference Subsystem
+   - Static ASL: Evaluates 63-element vector using signbridge_model.tflite (24 classes A-Y).
+   - Dynamic ASL: When triggered by 'M', records 30-frame sequence and evaluates 
+     using motion_model.tflite (BiLSTM for J and Z).
+   - ISL Dual-Hand: Evaluates 126-element vector using isl_model.tflite (26 classes A-Z).
+
+4. Module 4: Temporal Smoothing & Decision Buffer Module
+   - Maintains rolling deques of length 20.
+   - Applies linear weighted majority vote (weight = 1.0 + 0.15*i).
+   - Rejects predictions below 45% confidence threshold.
+   - Gates TTS announcement until a letter remains stable for 10 consecutive frames.
+
+5. Module 5: Interactive HUD & Word Composition Engine
+   - Renders semi-transparent HUD panels using OpenCV alpha blending.
+   - Draws colored skeleton connections using HSV color wheel mapping.
+   - Displays real-time confidence bar, detected hand label, and active word buffer.
+   - Handles keyboard inputs: SPACE, BACKSPACE, C (clear), T (speak word), 
+     R (spell word), V (voice toggle), L (ASL/ISL toggle), M (motion record), Q (quit).
+
+6. Module 6: Asynchronous Speech Synthesis Daemon
+   - Non-blocking background thread consuming a thread-safe FIFO queue.
+   - Flushes pending speech requests on state changes to eliminate latency.
+   - Uses pyttsx3 with Windows SAPI5 voice engine.
+
+
+3.2 TESTING
+-----------
+
+                                    TESTING MATRIX
+  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+  │  1. UNIT TESTS   │ ──> │ 2. INTEGRATION   │ ──> │ 3. SYSTEM &      │ ──> │ 4. QUANTITATIVE  │
+  │  • Normalization │     │    TESTS         │     │    ROBUSTNESS    │     │    EVALUATION    │
+  │  • Mirror parity │     │ • Pipeline link  │     │ • Illumination   │     │ • Accuracy: 99.9%│
+  │  • Audio queue   │     │ • Mode toggling  │     │ • Distance shift │     │ • Latency: <10ms │
+  │  • TFLite tensor │     │ • Motion capture │     │ • Fault recovery │     │ • Confusion Mtx  │
+  └──────────────────┘     └──────────────────┘     └──────────────────┘     └──────────────────┘
+
+1. Unit Testing:
+   - Landmark Normalization Invariance: Verified that translating landmarks across X, Y, Z 
+     and scaling by factors from 0.5x to 2.5x produced identical normalized vectors 
+     (L2 error < 1e-6).
+   - Hand Mirroring Invariance: Confirmed that negating the X-axis of a right-hand sign 
+     matches the geometric representation of a left-hand sign.
+   - Audio Queue Concurrency: Injected 50 rapid speech requests; confirmed video frame rate 
+     maintained >= 30 FPS without blocking or deadlock.
+   - TFLite Model Execution: Validated correct tensor input/output shapes and execution 
+     times across static, dynamic, and ISL TFLite interpreters.
+
+2. Integration Testing:
+   - Vision-to-Inference Pipeline: Verified seamless data flow from camera capture -> 
+     MediaPipe extraction -> normalization -> TFLite model -> prediction output.
+   - Key-Triggered Motion Handover: Confirmed pressing 'M' suspends static inference, 
+     captures 30 frames, classifies J or Z, and resumes static inference seamlessly.
+   - Language Mode Toggle: Confirmed pressing 'L' switches between ASL (63-dim) and ISL 
+     (126-dim) models while clearing buffers to prevent state corruption.
+
+3. System Testing & Edge-Case Robustness:
+   ┌──────────────────────┬───────────────────────────────┬───────────────────────────────┬─────────┐
+   │ Test Scenario        │ Test Condition                │ Observed Result               │ Status  │
+   ├──────────────────────┼───────────────────────────────┼───────────────────────────────┼─────────┤
+   │ Variable Lighting    │ Low-light (<50 lux) & backlit │ Stable tracking; "---" on loss│ PASS    │
+   │ Distance Variation   │ Hand at 30 cm vs. 100 cm      │ Invariant predictions         │ PASS    │
+   │ Left vs. Right Hand  │ Same sign with left & right   │ Identical prediction & conf.  │ PASS    │
+   │ Rapid Hand Motion    │ Changing signs in < 5 frames  │ Smoothing suppresses flicker  │ PASS    │
+   │ Camera Disconnection │ Unplugging webcam at runtime  │ Error screen displayed        │ PASS    │
+   │ Confusable Pairs     │ M vs. N, U vs. V, G vs. Q     │ Correct class chosen (>85%)   │ PASS    │
+   └──────────────────────┴───────────────────────────────┴───────────────────────────────┴─────────┘
+
+4. Quantitative Performance Evaluation & Metrics:
+   a) Static ASL Model (SignBridge_v3, 24 Classes):
+      - Dataset Size: 3,350 raw samples augmented x15 to ~56,700 samples.
+      - Overall Test Accuracy: 99.95% (Training accuracy: 99.77%).
+      - Best Epoch: Epoch 114 of 400.
+      - Model Size: 2.5 MB (.h5) -> 224 KB (.tflite).
+      - Confusion Matrix: 24x24 matrix shows near-perfect diagonal with minimal confusion 
+        on similar pairs (M/N, K/P).
+
+                      STATIC ASL PERFORMANCE METRICS (SAMPLE CLASSES)
+  ┌─────────┬──────────────┬───────────┬──────────────┬──────────────────────────┐
+  │  Class  │  Precision   │  Recall   │   F1-Score   │     Support (Samples)    │
+  ├─────────┼──────────────┼───────────┼──────────────┼──────────────────────────┤
+  │    A    │    1.00      │   1.00    │     1.00     │           338            │
+  │    B    │    1.00      │   1.00    │     1.00     │           338            │
+  │    C    │    1.00      │   1.00    │     1.00     │           338            │
+  │    D    │    1.00      │   1.00    │     1.00     │           337            │
+  │    E    │    1.00      │   1.00    │     1.00     │           338            │
+  │   ...   │    0.99      │   1.00    │     0.99     │           506            │
+  │    Y    │    1.00      │   1.00    │     1.00     │           506            │
+  ├─────────┼──────────────┼───────────┼──────────────┼──────────────────────────┤
+  │ AVERAGE │    0.9995    │  0.9995   │    0.9995    │          10,632          │
+  └─────────┴──────────────┴───────────┴──────────────┴──────────────────────────┘
+
+   b) Dynamic ASL Motion Model (SignBridge_Motion_LSTM, J & Z):
+      - Dataset Size: 200 raw 30-frame sequence recordings augmented x10 to 2,000 sequences.
+      - Test Accuracy: 100.0%.
+      - Precision / Recall: 1.00 across both J (pinky stroke) and Z (index zigzag).
+      - Model Size: 3.3 MB (.h5) -> 312 KB (.tflite).
+
+   c) Indian Sign Language Model (SignBridge_ISL, 26 Classes):
+      - Dataset Size: 5,200 raw samples (200/sign x 26 signs) augmented x15 to 78,000 samples.
+      - Input Dimension: 126 features (two hands).
+      - Test Accuracy: 99.88%.
+      - Model Size: 2.8 MB (.h5) -> 251 KB (.tflite).
+
+   d) Latency & Resource Benchmarks:
+      - MediaPipe Landmark Extraction: 18-24 ms per frame (asynchronous thread).
+      - TFLite Static Model Inference: 1.2 ms per frame on CPU.
+      - TFLite Dynamic LSTM Inference: 4.8 ms per sequence on CPU.
+      - Display & HUD Rendering: 3.5 ms per frame.
+      - Pipeline Throughput: Sustained 30-32 FPS on standard consumer PC/laptop CPU.
+
+================================================================================
+                                END OF REPORT
+================================================================================

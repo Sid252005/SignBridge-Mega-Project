@@ -1,0 +1,148 @@
+# SignBridge AI: Project Analysis & Context Hand-off
+
+This file provides a comprehensive analysis of the SignBridge AI project, detailing the tech stack, files, models, and critical logic details to give incoming developers or AI agents immediate context for future task implementations.
+
+---
+
+## 📁 1. Project Directory Structure
+
+Here is a visual map of the workspace files and their functions:
+
+```
+Mega Project/
+├── dataset/                        # NumPy arrays (.npy) holding landmark datasets
+│   ├── A.npy, B.npy, ..., Y.npy    # Static signs (A-Y, excluding J and Z), 150 samples per sign
+│   └── J_motion.npy, Z_motion.npy  # Motion signs (J, Z), 100 sequences of 30 frames per sign
+├── __pycache__/                    # Compiled Python bytecode cache files
+├── data_collection.py              # Interactive utility to collect static signs (A-Y)
+├── motion_data_collection.py       # Interactive utility to collect motion signs (J, Z)
+├── train_model.py                  # Training script for the static 24-class neural network
+├── train_motion_model.py           # Training script for the LSTM motion classifier (J, Z)
+├── predict.py                      # Main real-time prediction and speech synthesis application
+├── utils.py                        # Common preprocessing, normalization, and augmentation functions
+├── test_hand.py                    # Simple diagnostic script to verify MediaPipe + Camera capture
+├── hand_landmarker.task            # Pre-compiled MediaPipe hand landmarker model asset
+├── signbridge_model.h5             # Trained Keras model for static signs
+├── signbridge_model.tflite         # Optimized TFLite version of the static model
+├── motion_model.h5                 # Trained Keras LSTM model for motion gestures
+├── motion_model.tflite             # Optimized TFLite version of the motion model
+├── label_encoder.npy               # Target classes encoder array for static signs
+├── motion_label_encoder.npy        # Target classes encoder array for motion gestures
+├── training_results.png            # Accuracy/Loss/Confusion matrix plots for static training
+├── motion_training_results.png     # Accuracy/Loss/Confusion matrix plots for motion training
+├── Presentation_module.txt         # Text notes explaining module designs
+├── predict_explanation.txt         # Detailed textual review of predict.py's systems
+└── Team_Code_Explanation.txt       # Broad architecture and usage guidelines
+```
+
+---
+
+## 🛠️ 2. Tech Stack and Versions
+
+The project runs on **Python 3.12.10** with the following key library versions:
+
+| Library | Version | Role in the System |
+| :--- | :--- | :--- |
+| **Python** | `3.12.10` | Base programming language environment |
+| **TensorFlow** | `2.21.0` | Deep Learning framework used to run models |
+| **Keras** | `3.13.2` | Core neural network model building and training |
+| **MediaPipe** | `0.10.32` | Extracts 21 3D hand landmarks from images/video in real-time |
+| **OpenCV (opencv-python)** | `4.13.0.92` | Camera streaming, frame pre-processing, and GUI/HUD rendering |
+| **NumPy** | `2.4.3` | Multi-dimensional matrix operations and landmark data persistence |
+| **pyttsx3** | `2.91` | Cross-platform Text-to-Speech (TTS) library (runs offline) |
+| **pywin32 / pypiwin32** | `306` / `223` | Windows API binding required by `pyttsx3` for SAPI5 voices |
+| **scikit-learn** | `1.8.0` | Train/test splitting, label encoding, and metrics report generation |
+| **Matplotlib** | `3.10.8` | Plotting training metrics (Accuracy/Loss curves) |
+| **Seaborn** | `0.13.2` | Plotting high-quality confusion matrix heatmaps |
+
+---
+
+## 🧠 3. Analysis of Critical Files
+
+### 📄 utils.py
+This utility module manages data preprocessing, coordinate geometry normalization, and data augmentation. It is critical that any changes here are mirrored across both data-collection scripts and inference engines.
+
+#### Key Functions:
+1. **`normalize_landmarks(raw)`**
+   - **Input**: A flat array/list of 63 numbers representing 21 hand landmarks `(x, y, z)` extracted by MediaPipe.
+   - **Translation**: Translates the coordinate space relative to the wrist (landmark index `0`). The wrist becomes `(0, 0, 0)`.
+   - **Scaling**: Calculates the Euclidean distance from the wrist to the middle finger MCP (landmark index `9`) as the palm reference size. Divides all coordinates by this distance.
+   - **Output**: Flattened array of 63 values.
+   - **AI Context**: Makes features scale-invariant (independent of camera distance) and translation-invariant (independent of position on screen).
+
+2. **`mirror_hand(pts)`**
+   - **Operation**: Negates the X-coordinates (`pts[:, 0] = -pts[:, 0]`) of normalized landmarks while leaving Y and Z unchanged.
+   - **AI Context**: Allows the system to support both hands seamlessly. The static model is trained on Right Hand data; if `predict.py` detects a Left Hand, it mirrors it using this function so the model can read it as a Right Hand.
+
+3. **`augment_dataset(X, y, factor)`**
+   - **AI Context**: Multiplies static sign data to increase model robustness against real-world variations. Includes:
+     - **Gaussian Noise**: Simulates camera sensor noise/jitter.
+     - **Scale Jitter**: Random scale factor between `0.85` and `1.15`.
+     - **2-D Rotation**: Simulates hand tilt (up to 15 degrees in X-Y plane).
+     - **Perspective Warp**: Applies random shear factors to simulate camera angles (helps separate similar signs like `G`/`Q` and `M`/`N`).
+     - **Finger Dropout**: Randomly zeroes out some coordinates (probability `0.08`) to simulate partial hand occlusion.
+     - **Mirror Flipping**: Injects mirrored samples to train on both orientations.
+
+---
+
+### 📄 predict.py
+This is the core runtime execution script. It captures the webcam feed, processes frames through MediaPipe, performs model inferences, and drives the HUD/Voice engine.
+
+#### Key Architectural Systems:
+1. **Startup Performance Tricks**:
+   - Immediately sets `TF_CPP_MIN_LOG_LEVEL = '3'` and other environment variables to silence TensorFlow oneDNN/C++ terminal logs.
+   - Instantly opens the camera stream and displays a "Loading..." screen *before* importing heavy frameworks (TensorFlow, MediaPipe), avoiding a laggy blank startup.
+
+2. **Optimized Inference**:
+   - Loads model parameters through `tf.lite.Interpreter` rather than loading the full Keras models. TFLite inference runs **10x faster** on standard CPUs. Falls back to Keras `.h5` model files only if `.tflite` builds are missing.
+
+3. **Non-Blocking Background Text-To-Speech (TTS)**:
+   - OpenCV frames must process at ~30 FPS. Standard `pyttsx3` speaking blocks the execution thread.
+   - **Solution**: Launches a background daemon thread (`_tts_worker`) listening to a `queue.Queue`.
+   - `speak(text, flush=True)` pushes words to the queue. Setting `flush=True` empties the queue instantly to discard stale letters queued during fast hand movements.
+
+4. **Prediction Smoothing & Stabilization**:
+   - A single-frame raw prediction is prone to camera noise and flickering.
+   - `predict.py` maintains a `prediction_buf` (deque, max length `20`).
+   - Uses a **weighted majority vote** to predict: newer frames receive higher vote coefficients (`weight = 1.0 + index * 0.15`).
+   - Confidences are averaged using the same weighted distribution.
+   - A character must be predicted for 10 frames consecutively (`LETTER_STABLE_FRAMES = 10`) before it is spoken by the TTS engine.
+
+5. **Motion Gesture Classification (J & Z)**:
+   - J and Z are motion gestures (dynamic path over time) rather than static poses.
+   - The LSTM model for dynamic signs is trained to output either J or Z. Running it continuously leads to false positives (hallucinations) during neutral movement.
+   - **Solution**: The motion classifier is **key-triggered**. The user presses the **'M' key**, performs the gesture, and the app records a 30-frame sequence. The sequence is normalized per-frame and sent to the LSTM model (`predict_motion()`) for validation.
+
+6. **Keybindings & Actions**:
+   - `SPACE`: Commits the current stable prediction to the active word and speaks it.
+   - `BACKSPACE`: Deletes the last character and voices the deletion.
+   - `C`: Clears the built word.
+   - `M`: Enters recording mode for J/Z motion gestures.
+   - `T`: Speaks the completed word (e.g. "hello").
+   - `R`: Spells the completed word letter-by-letter (e.g., "H... E... L... L... O").
+   - `V`: Toggles the TTS voice on/off.
+   - `Q`: Safely releases video devices and exits.
+
+---
+
+## 🚀 4. Hand-off Details for Future Implementation Tasks
+
+When preparing to build next-step features, keep the following core constraints in mind:
+
+### ⚠️ Preprocessing Match (CRITICAL)
+Any training pipeline modifications, new data-collection routines, or feature updates must feed landmarks through `utils.normalize_landmarks()`. Failing to normalize or using a different normalization equation will result in zero-accuracy model behavior.
+
+### 👐 Dual Hand Support
+The models expect Right Hand landmarks. Left hands are supported by detecting the hand label from MediaPipe and calling `mirror_hand()` before running inference. If the next task involves simultaneously predicting multiple hands:
+- Ensure separate buffers (`prediction_buf`, `conf_buf`) are maintained for each hand index.
+- Keep the mirror condition specific to each hand instance.
+
+### 🗣️ Thread Safety for Speech
+Never invoke standard blocking `pyttsx3` commands in OpenCV's main thread. Always route voice commands through `speak(text, flush=True)` to leverage the background daemon pipeline.
+
+### 🔄 Expanding Classes
+To add more letters, numbers, or custom gestures:
+1. Determine if the new gesture is **static** (single frame) or **motion** (dynamic sequence).
+2. Collect samples using `data_collection.py` (static) or `motion_data_collection.py` (motion).
+3. Train the respective network, update the classification layers' output sizes, and save the updated `.npy` label encoder maps.
+4. Export the trained model as a `.tflite` file. The inference script will automatically detect and prioritize it.
